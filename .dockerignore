@@ -2,6 +2,15 @@
 .venv*
 data
 __pycache__
+**/__pycache__
+**/*.pyc
 .pytest_cache
 *.log
 .runpod-token
+.env
+**/.env
+dist
+build
+vendor/4danyone/models
+vendor/4danyone/third_party/GVHMR/inputs/checkpoints
+vendor/4danyone/third_party/GVHMR/outputs

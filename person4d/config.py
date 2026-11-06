@@ -8,13 +8,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def configured_python(variable: str, relative_default: str) -> Path:
+    """Keep the venv path itself; resolving its symlink loses the environment."""
+    return Path(os.environ.get(variable) or str(ROOT / relative_default)).expanduser()
+
+
 @dataclass(frozen=True)
 class Settings:
     root: Path = ROOT
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("PERSON4D_DATA_DIR", str(ROOT / "data"))).expanduser().resolve())
     token: str = field(default_factory=lambda: os.environ.get("PERSON4D_TOKEN", ""))
-    inference_python: Path = field(default_factory=lambda: Path(os.environ.get("PERSON4D_INFERENCE_PYTHON", str(ROOT / ".venvs/inference/bin/python"))))
-    training_python: Path = field(default_factory=lambda: Path(os.environ.get("PERSON4D_TRAINING_PYTHON", str(ROOT / ".venvs/training/bin/python"))))
+    inference_python: Path = field(default_factory=lambda: configured_python("PERSON4D_INFERENCE_PYTHON", ".venvs/inference/bin/python"))
+    training_python: Path = field(default_factory=lambda: configured_python("PERSON4D_TRAINING_PYTHON", ".venvs/training/bin/python"))
+    web_python: Path = field(default_factory=lambda: configured_python("PERSON4D_WEB_PYTHON", ".venv/bin/python"))
     upload_limit: int = field(default_factory=lambda: int(os.environ.get("PERSON4D_UPLOAD_LIMIT", str(2 * 1024**3))))
     host: str = field(default_factory=lambda: os.environ.get("PERSON4D_HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: int(os.environ.get("PERSON4D_PORT", "8000")))

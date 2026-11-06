@@ -16,6 +16,8 @@ PyYAML==6.0.2
 tqdm==4.67.1
 typing-extensions>=4.10,<5
 ninja>=1.11,<2
+jaxtyping==0.2.29
+rich==14.2.0
 setuptools>=75,<81
 wheel>=0.45,<1
 pycolmap @ git+https://github.com/JasonLSC/pycolmap.git@83307349cb8e383f7bc55eb40f577e0db54d69e0

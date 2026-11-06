@@ -11,6 +11,54 @@ weights download onto your pod. SMPL-X is supplied separately by the user.
 
 ## Run on RunPod
 
+### Prebuilt container (recommended)
+
+Use the application image instead of installing the software inside each pod:
+
+```text
+ghcr.io/pareekshit28/person-to-4dgs:latest
+```
+
+Image tags and build status are available from the
+[container package](https://github.com/users/pareekshit28/packages/container/package/person-to-4dgs)
+and [image build workflow](https://github.com/pareekshit28/person-to-4dgs/actions/workflows/image.yml).
+For reproducible deployments, select an immutable `sha-...` tag or digest.
+
+Configure your RunPod with:
+
+- An NVIDIA GPU supported by the image (A100, RTX 30/Ada, Hopper or RTX PRO Blackwell).
+- HTTP port **8000** exposed.
+- A standard Network Volume or Volume Disk for active job data.
+- At least **20 GB container disk** and an initial **150 GB persistent data volume**.
+- The image's default entrypoint; leave the custom start command empty.
+
+Environments and compiled modules live at fixed paths inside the image, separate
+from the mounted data. Startup checks GPU execution and starts the UI. It does
+not run package installation, `apt`, `pip`, `uv`, or CUDA compilation. A new host
+still needs to pull the image; cached hosts can reuse its layers.
+
+**Reusing your current network volume:** if the source installation already put
+models and jobs in `/workspace/person-to-4dgs/data`, set this pod environment
+variable:
+
+```text
+PERSON4D_DATA_DIR=/workspace/person-to-4dgs/data
+```
+
+This reuses existing weights, uploads, jobs and the access token. Fresh installs
+default to `/workspace/person4d`. Upload the separately licensed SMPL-X model in
+the UI if it is not already in that data directory. Public models download only
+when requested and missing. The container restores its local GVHMR links to
+existing persistent weights each time it starts.
+
+The published build compiles native kernels for compute capabilities
+`8.0;8.6;8.9;9.0;12.0` and verifies the binaries contain those targets. Actual GPU
+forward/backward validation runs on the pod, without compiling. The image uses
+PyTorch SDPA for inference. A successful image build is not a claim that a full
+character reconstruction has been validated on every GPU.
+
+### Installing from source (alternative)
+
 Recommended for the default high-quality recipe: **one H200 GPU** with a
 CUDA 12.8 development container, **150 GB persistent disk for an initial job**,
 16+ CPU cores and 64+ GB system RAM. An H100 80 GB or RTX PRO 6000 Blackwell
@@ -170,8 +218,13 @@ Useful environment variables:
 | `PERSON4D_UPLOAD_LIMIT` | `2147483648` bytes (2 GiB) |
 | `MAX_JOBS` | `4` concurrent C++ compiler jobs during setup |
 
-`Dockerfile` provides an optional image definition. GPU compilation and model
-setup happen on the pod at first start, not during a CPU-only image build.
+`Dockerfile` installs dependencies and compiles native modules at image build
+time on a CPU builder with a CUDA toolkit. It needs sufficient RAM and free
+disk, but no GPU. Build locally with
+`bash scripts/build_image.sh person-to-4dgs:local`. The image build workflow
+publishes to GHCR using the repository's GitHub Actions token. For a newly
+created personal-account package, its owner must make the package public once
+in GitHub Package settings to allow anonymous RunPod pulls.
 
 ## Local development and verification
 
