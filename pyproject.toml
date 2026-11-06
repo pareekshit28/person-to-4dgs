@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "person-to-4dgs"
+version = "0.1.0"
+description = "RunPod web app for character performances reconstructed with 4DAnyone and FreeTimeGS"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.121,<1", "uvicorn[standard]>=0.38,<1", "python-multipart>=0.0.20,<1", "filelock>=3.20,<4"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9", "httpx>=0.28,<1", "numpy>=1.26,<3", "Pillow>=10,<13"]
+
+[project.scripts]
+person4d = "person4d.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["person4d*"]
+
+[tool.setuptools.package-data]
+person4d = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,14 @@
+name: CPU checks
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[test]'
+      - run: python -m pytest -q
+      - run: bash -n scripts/setup_runpod.sh scripts/start.sh
+      - run: python -m compileall -q person4d scripts

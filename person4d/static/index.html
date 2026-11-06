@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Turn a video of a person into an animated, free-viewpoint 4D Gaussian scene.">
+  <title>Person to 4DGS</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="14" rx="3"/><path d="m16 10 5-3v10l-5-3"/></symbol>
+    <symbol id="i-orbit" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="10" ry="4.5" transform="rotate(-35 12 12)"/><path d="M12 5v14M7.5 8l4.5-3 4.5 3v8L12 19l-4.5-3z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 16v4h16v-4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14M10 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-6"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8zm0 0v5h5M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 5 7 7-7 7"/></symbol>
+  </svg>
+
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Reconstruction history">
+      <a class="brand" href="/" aria-label="Person to 4DGS home"><span class="brand-mark"><svg><use href="#i-orbit"/></svg></span><span>Person to <strong>4DGS</strong><small>PERFORMANCE CAPTURE</small></span></a>
+      <button id="new-job" class="button new-button"><svg><use href="#i-plus"/></svg>New reconstruction</button>
+      <div class="history-heading"><span>YOUR RECONSTRUCTIONS</span><span id="job-count" class="count">0</span></div>
+      <nav id="job-list" class="job-list" aria-label="Saved jobs"></nav>
+      <div id="history-empty" class="history-empty"><svg><use href="#i-video"/></svg><p>Your performances will appear here.</p></div>
+      <div class="sidebar-bottom">
+        <div class="node-card"><span id="node-dot" class="status-dot"></span><div><strong id="node-title">Connecting to pod</strong><small id="node-subtitle">Checking GPU and models</small></div></div>
+        <button id="open-setup" class="text-button"><svg><use href="#i-settings"/></svg>Pod &amp; model setup<svg class="end-icon"><use href="#i-chevron"/></svg></button>
+        <button id="logout" class="text-button quiet" hidden>Lock workspace</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><div class="breadcrumb">WORKSPACE <span>/</span> <strong id="breadcrumb-name">New reconstruction</strong></div><span class="local-badge"><span class="status-dot ready"></span>YOUR POD · YOUR FILES</span></header>
+      <div id="connection-banner" class="connection-banner" role="status" hidden>Connection lost. Reconnecting to your pod…</div>
+
+      <section id="composer" class="workspace composer" aria-labelledby="composer-title">
+        <div class="page-intro"><div class="eyebrow"><span class="tiny-line"></span>FROM VIDEO TO VOLUME</div><h1 id="composer-title">A performance.<br><span>Every angle.</span></h1><p>Turn a video of a person into an animated 4D scene.<br class="desktop-break"> Upload, choose a moment, and reconstruct.</p><div class="intro-orbit" aria-hidden="true"><span></span><span></span><span></span><b>4D</b></div></div>
+        <div id="setup-callout" class="setup-callout" hidden><div><strong>Your workspace needs a little setup</strong><span id="setup-callout-message">Prepare the models before starting your first reconstruction.</span></div><button id="callout-setup" class="button small secondary">Open setup<svg><use href="#i-arrow"/></svg></button></div>
+        <form id="reconstruction-form" novalidate>
+          <div class="composer-grid">
+            <section class="panel source-panel" aria-labelledby="source-heading">
+              <div class="panel-heading"><span class="step-number">01</span><h2 id="source-heading">Your source video</h2><span class="panel-hint">One person · steady camera</span></div>
+              <input id="video-file" name="file" type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi" class="visually-hidden">
+              <label id="drop-zone" class="drop-zone" for="video-file" tabindex="0"><span class="upload-icon"><svg><use href="#i-upload"/></svg></span><strong>Drop your video here</strong><span>or <em>browse files</em></span><small>MP4, MOV, MKV or WebM</small></label>
+              <div id="source-loaded" class="source-loaded" hidden><div class="source-video-wrap"><video id="source-preview" controls playsinline preload="metadata"></video><span class="source-tag">SOURCE</span></div><div class="file-meta"><svg><use href="#i-video"/></svg><div><strong id="file-name"></strong><small id="file-info"></small></div><button id="replace-video" type="button" class="text-link">Replace</button></div></div>
+              <div id="segment-controls" class="segment-controls" hidden><div class="segment-heading"><label for="start-time">Choose your moment</label><span id="segment-duration" class="mono">121 frames · 5.04 s</span></div><div class="range-labels"><span>START</span><span id="segment-end-label">END</span></div><input id="start-range" type="range" min="0" max="0" step="0.1" value="0" aria-label="Segment start time"><div class="time-controls"><div class="time-input"><label for="start-time">Starts at</label><input id="start-time" name="start_time" type="number" min="0" step="0.1" value="0" inputmode="decimal"><span>s</span></div><button id="preview-segment" type="button" class="button small secondary"><svg><use href="#i-play"/></svg>Preview segment</button></div><p id="segment-help" class="field-help">The reconstruction uses one continuous 121-frame segment.</p></div>
+              <p id="video-error" class="field-error" role="alert" hidden></p>
+              <div class="source-tips"><span>FOR A CLEARER RESULT</span><p>Keep the full body visible, with a steady camera and good lighting. Simple clothing and a clear silhouette work best.</p></div>
+            </section>
+
+            <section class="panel settings-panel" aria-labelledby="settings-heading">
+              <div class="panel-heading"><span class="step-number">02</span><h2 id="settings-heading">Reconstruction</h2></div>
+              <div class="settings-content"><label class="field-label" for="job-title">Name <span>optional</span></label><input id="job-title" name="title" type="text" maxlength="120" placeholder="e.g. Walking performance" autocomplete="off">
+                <fieldset class="quality-fieldset"><legend class="field-label">Quality</legend>
+                  <label class="quality-option"><input type="radio" name="preset" value="preview"><span class="radio-shape"></span><span class="quality-copy"><strong>Preview</strong><small>A quick first look</small></span><span class="views-count">12 views</span></label>
+                  <label class="quality-option"><input type="radio" name="preset" value="balanced"><span class="radio-shape"></span><span class="quality-copy"><strong>Balanced</strong><small>Detail and training time in balance</small></span><span class="views-count">24 views</span></label>
+                  <label class="quality-option"><input type="radio" name="preset" value="quality" checked><span class="radio-shape"></span><span class="quality-copy"><strong>High quality <span class="recommended">DEFAULT</span></strong><small>Full detail · three camera heights</small></span><span class="views-count">48 views</span></label>
+                </fieldset>
+                <details class="advanced-options"><summary>Advanced settings<svg><use href="#i-plus"/></svg></summary><div class="advanced-grid"><div><label class="field-label" for="target-fps">Frame rate</label><select id="target-fps" name="target_fps"><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="30">30 FPS</option></select></div><div><label class="field-label" for="seed">Seed</label><input id="seed" name="seed" type="number" value="42" min="0" max="2147483647" step="1"></div><div class="full-width"><label class="field-label" for="steps">Training steps <span>optional</span></label><input id="steps" name="steps" type="number" min="1000" max="100000" step="100" placeholder="Use preset default"><p class="field-help">More steps take longer. Start with the preset.</p></div></div></details>
+                <div id="upload-progress" class="upload-progress" hidden><div><span id="upload-label">Uploading video</span><strong id="upload-percent">0%</strong></div><progress id="upload-bar" max="100" value="0"></progress></div>
+                <button id="submit-job" type="submit" class="button primary run-button" disabled><svg><use href="#i-orbit"/></svg><span>Reconstruct in 4D</span><svg class="end-icon"><use href="#i-arrow"/></svg></button>
+                <p id="submit-help" class="submit-help">Upload a video to get started.</p>
+              </div>
+            </section>
+          </div>
+        </form>
+        <div class="workflow-note"><svg><use href="#i-video"/></svg><span>Your video</span><i></i><svg><use href="#i-orbit"/></svg><span>Multiple viewpoints</span><i></i><span class="workflow-result">Animated 4D scene</span></div>
+      </section>
+
+      <section id="job-workspace" class="workspace job-workspace" aria-labelledby="job-title-heading" hidden>
+        <div class="job-page-heading"><div><div class="eyebrow">YOUR RECONSTRUCTION</div><h1 id="job-title-heading"></h1><div class="job-subheading"><span id="job-status" class="badge"></span><span id="job-description"></span></div></div><div class="job-actions"><button id="cancel-job" class="button secondary" hidden>Stop job</button><button id="retry-job" class="button secondary" hidden><svg><use href="#i-play"/></svg><span>Resume reconstruction</span></button></div></div>
+        <div id="job-error" class="job-error" role="alert" hidden></div>
+        <div class="job-grid"><div class="job-main-column">
+          <section class="panel output-panel"><div class="output-tabs" role="tablist" aria-label="Preview type"><button id="tab-result" type="button" role="tab" aria-selected="true" aria-controls="pane-result" class="output-tab active">4D scene</button><button id="tab-source" type="button" role="tab" aria-selected="false" aria-controls="pane-source" class="output-tab">Source video</button><button id="tab-views" type="button" role="tab" aria-selected="false" aria-controls="pane-views" class="output-tab" disabled>Generated views</button><a id="open-player" class="text-link viewer-open" href="#" target="_blank" rel="noopener" hidden>Open viewer<svg><use href="#i-external"/></svg></a></div>
+            <div id="pane-result" role="tabpanel" aria-labelledby="tab-result" class="preview-pane"><div id="result-placeholder" class="result-placeholder"><span class="orbit-placeholder"><svg><use href="#i-orbit"/></svg></span><div id="placeholder-state" class="eyebrow">RECONSTRUCTION SPACE</div><h3 id="placeholder-title">Your performance takes shape here</h3><p id="placeholder-description">Once reconstruction is complete, explore the animated scene from any angle.</p><span class="viewer-grid" aria-hidden="true"></span></div><iframe id="result-viewer" title="Interactive animated 4D Gaussian scene" allow="autoplay; fullscreen; xr-spatial-tracking" allowfullscreen hidden></iframe></div>
+            <div id="pane-source" role="tabpanel" aria-labelledby="tab-source" class="preview-pane" hidden><video id="job-source-preview" controls playsinline preload="metadata"></video></div>
+            <div id="pane-views" role="tabpanel" aria-labelledby="tab-views" class="preview-pane" hidden><div class="view-select-wrap"><label for="generated-view-select">Camera</label><select id="generated-view-select"></select></div><video id="generated-view-preview" controls playsinline preload="metadata"></video></div>
+            <div class="viewer-caption"><span id="viewer-caption">Orbit, zoom and scrub through time when your scene is ready.</span><span class="mono" id="viewer-timing">121 FRAMES</span></div>
+          </section>
+          <details id="logs-details" class="panel logs-panel"><summary><span><span class="terminal-mark">&gt;_</span>Run log</span><span id="log-state">Live process output</span></summary><pre id="job-log" tabindex="0" aria-label="Process log"></pre><button id="copy-logs" type="button" class="text-link copy-logs">Copy log</button></details>
+        </div><div class="job-side-column">
+          <section class="panel progress-panel"><div class="panel-heading"><h2>Progress</h2><span id="overall-percent" class="mono">0%</span></div><div class="progress-content"><div class="progress-track"><span id="overall-progress"></span></div><p id="job-message" role="status" aria-live="polite"></p><ol id="stage-list" class="stage-list"><li data-stage="probe"><span class="stage-indicator">1</span><div><strong>Check source</strong><small>Read the selected segment</small></div></li><li data-stage="generate"><span class="stage-indicator">2</span><div><strong>Generate viewpoints</strong><small>See the person from every side</small></div></li><li data-stage="adapter"><span class="stage-indicator">3</span><div><strong>Prepare the character</strong><small>Separate foreground and build geometry</small></div></li><li data-stage="train"><span class="stage-indicator">4</span><div><strong>Reconstruct in 4D</strong><small>Optimize appearance and motion</small></div></li><li data-stage="export"><span class="stage-indicator">5</span><div><strong>Prepare playback</strong><small>Export the animated scene</small></div></li></ol></div><div class="job-facts"><div><span>Started</span><strong id="job-created">—</strong></div><div><span>Quality</span><strong id="job-quality">—</strong></div><div><span>Segment</span><strong id="job-segment">—</strong></div></div></section>
+          <section id="downloads-panel" class="panel downloads-panel" hidden><div class="panel-heading"><h2>Your files</h2></div><div id="downloads-list" class="downloads-list"></div><p class="downloads-note">The animated model includes the recorded performance. Use a compatible 4DGS viewer for playback.</p></section>
+        </div></div>
+      </section>
+      <footer class="page-footer"><span>PERSON TO 4DGS</span><span>Built for your GPU workspace <span class="footer-dot">·</span> Animated performance capture</span></footer>
+    </main>
+  </div>
+
+  <dialog id="setup-dialog" class="setup-dialog" aria-labelledby="setup-title"><div class="dialog-heading"><div><div class="eyebrow">WORKSPACE SETUP</div><h2 id="setup-title">Ready your pod</h2></div><button id="close-setup" class="icon-button" aria-label="Close setup"><svg><use href="#i-close"/></svg></button></div><p class="dialog-intro">Prepare the GPU and models once. Jobs and model files stay on your pod's persistent storage.</p><div id="setup-checks" class="setup-checks"></div><div class="model-setup-card"><div class="setup-step-label"><span class="step-number">01</span><strong>Reconstruction models</strong><span id="public-models-status" class="badge">Checking</span></div><p>Download the public models for motion recovery and viewpoint generation.</p><button id="download-models" class="button secondary"><svg><use href="#i-download"/></svg>Download models</button></div><div class="model-setup-card"><div class="setup-step-label"><span class="step-number">02</span><strong>SMPL-X body model</strong><span id="smplx-status" class="badge">Checking</span></div><p>SMPL-X requires a separate account and license. Download the neutral model from the <a href="https://smpl-x.is.tue.mpg.de/" target="_blank" rel="noopener">official SMPL-X website<svg><use href="#i-external"/></svg></a>, then upload your licensed file here.</p><label for="smplx-file" class="button secondary file-upload-button"><svg><use href="#i-upload"/></svg><span id="smplx-upload-label">Upload model file</span></label><input id="smplx-file" type="file" accept=".npz,.zip" class="visually-hidden"><small class="field-help">SMPLX_NEUTRAL.npz or models_smplx_v1_1.zip</small></div><div id="setup-task" class="setup-task" hidden><div><span id="setup-task-state" class="badge"></span><strong id="setup-task-message"></strong></div><pre id="setup-task-log" tabindex="0" aria-label="Setup log"></pre></div><div class="dialog-footer"><span id="setup-summary">Checking your workspace…</span><button id="done-setup" class="button primary">Done<svg><use href="#i-arrow"/></svg></button></div></dialog>
+
+  <dialog id="login-dialog" class="login-dialog" aria-labelledby="login-title"><span class="brand-mark"><svg><use href="#i-orbit"/></svg></span><div class="eyebrow">YOUR PRIVATE WORKSPACE</div><h2 id="login-title">Connect to your pod</h2><p>Enter the access token printed when you started the server.</p><form id="login-form"><label class="field-label" for="access-token">Access token</label><input id="access-token" type="password" autocomplete="current-password" required placeholder="Paste your workspace token"><p id="login-error" class="field-error" role="alert" hidden></p><button id="login-submit" type="submit" class="button primary">Open workspace<svg><use href="#i-arrow"/></svg></button></form><small>Your token stays in this browser session.</small></dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden><span id="toast-text"></span><button id="dismiss-toast" class="icon-button" aria-label="Dismiss notification"><svg><use href="#i-close"/></svg></button></div>
+</body>
+</html>

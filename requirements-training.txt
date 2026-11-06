@@ -1,0 +1,20 @@
+# Minimal dependencies for the pinned trainer and native FTGS export.
+# Torch is installed first from the CUDA 12.8 wheel index by setup_runpod.sh.
+numpy==1.26.4
+opencv-python-headless==4.11.0.86
+scipy==1.15.3
+scikit-learn==1.7.2
+Pillow==11.3.0
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+tyro==0.9.1
+torchmetrics==1.4.3
+matplotlib==3.10.6
+plyfile==1.1.2
+tensorboard==2.20.0
+PyYAML==6.0.2
+tqdm==4.67.1
+typing-extensions>=4.10,<5
+ninja>=1.11,<2
+setuptools>=75,<81
+wheel>=0.45,<1
