@@ -20,6 +20,10 @@ def main():
     print('Compute capability:', torch.cuda.get_device_capability(0), flush=True)
     basic = torch.ones((32, 32), device=device)
     assert (basic @ basic).sum().item() == 32768
+    # Packed projection uses PyTorch's CUDA scan internally. Test it before
+    # loading extensions so a base CUDA failure is not attributed to gsplat.
+    scan = torch.arange(8, device=device, dtype=torch.int32).cumsum(0)
+    assert scan.tolist() == [0, 1, 3, 6, 10, 15, 21, 28]
     torch.cuda.synchronize(device)
     print('Basic PyTorch CUDA execution passed.', flush=True)
 

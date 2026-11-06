@@ -18,3 +18,4 @@ typing-extensions>=4.10,<5
 ninja>=1.11,<2
 setuptools>=75,<81
 wheel>=0.45,<1
+pycolmap @ git+https://github.com/JasonLSC/pycolmap.git@83307349cb8e383f7bc55eb40f577e0db54d69e0

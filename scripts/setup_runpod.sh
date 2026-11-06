@@ -54,7 +54,7 @@ for environment in inference training; do
 done
 uv pip install --python .venvs/inference/bin/python -r vendor/4danyone/requirements.txt 'torch==2.8.0' 'torchvision==0.23.0'
 uv pip install --python .venvs/training/bin/python -r requirements-training.txt 'torch==2.8.0' 'torchvision==0.23.0'
-uv pip install --python .venvs/training/bin/python --no-build-isolation -r requirements-training-cuda.txt
+PYTHONUNBUFFERED=1 .venvs/training/bin/python scripts/install_training_cuda.py
 
 # Optional acceleration. Failure keeps the supported PyTorch SDPA path usable.
 if [[ "$ATTENTION" != sdpa ]]; then
@@ -65,7 +65,6 @@ if [[ "$ATTENTION" != sdpa ]]; then
   fi
 fi
 PYTHONPATH="$ROOT/vendor/4danyone:$ROOT" .venvs/inference/bin/python -c 'import torch, fdanyone; assert torch.cuda.is_available(); print("Inference GPU:", torch.cuda.get_device_name(0))'
-.venvs/training/bin/python scripts/gpu_smoke.py
 if (( WITH_MODELS )); then
   .venvs/inference/bin/python vendor/4danyone/scripts/download_model.py \
     --model_dir "$PERSON4D_DATA_DIR/models" --gvhmr_root "$ROOT/vendor/4danyone/third_party/GVHMR"

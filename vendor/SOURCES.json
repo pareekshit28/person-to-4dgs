@@ -3,6 +3,6 @@
   "gvhmr": {"url": "https://github.com/zju3dv/GVHMR", "commit": "6ec3ca39336c50492c0fae65fba2fb831fc7d866", "license_file": "4danyone/third_party/GVHMR/LICENSE", "changes": ["Add UPSTREAM_REVISION; omit demo media and notebooks."]},
   "freetimegs": {"url": "https://github.com/OpsiClear-4DGS/FreeTimeGsVanilla", "commit": "1f160e290b00d88e097739ecc26d93500d6c55e8", "license": "AGPL-3.0", "changes": ["Omit demo GIF.", "Publish checkpoints atomically with a same-directory temporary file and os.replace.", "Add camera_split.py and test_every=0 for training every camera; label camera-0 diagnostics as in-sample."]},
   "gsplat": {"url": "https://github.com/nerfstudio-project/gsplat", "commit": "b60e917c95afc449c5be33a634f1f457e116ff5e", "installation": "requirements-training-cuda.txt"},
-  "pycolmap": {"url": "https://github.com/JasonLSC/pycolmap", "commit": "83307349cb8e383f7bc55eb40f577e0db54d69e0", "installation": "requirements-training-cuda.txt"},
+  "pycolmap": {"url": "https://github.com/JasonLSC/pycolmap", "commit": "83307349cb8e383f7bc55eb40f577e0db54d69e0", "installation": "requirements-training.txt"},
   "fused-ssim": {"url": "https://github.com/rahul-goel/fused-ssim", "commit": "1272e21a282342e89537159e4bad508b19b34157", "installation": "requirements-training-cuda.txt"}
 }

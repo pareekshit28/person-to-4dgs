@@ -67,6 +67,11 @@ Keep the terminal open until it completes. Re-running
 setup reuses installed environments and download caches. Public weights can
 also be downloaded during installation with `--with-models`.
 
+Native reconstruction extensions are compiled for the visible GPU architectures
+and installed training PyTorch/CUDA version. Setup records that build only after
+the CUDA tests pass. A change of GPU architecture, PyTorch, compiler or pinned
+extension source triggers a fresh build instead of reusing an incompatible wheel.
+
 In the UI:
 
 1. Download the public models in **Setup**.
@@ -169,6 +174,21 @@ Useful environment variables:
 setup happen on the pod at first start, not during a CPU-only image build.
 
 ## Local development and verification
+
+If ordinary PyTorch CUDA operations succeed but the reconstruction rasterizer
+fails, rebuild its native CUDA extensions against the current GPU:
+
+```bash
+cd /workspace/person-to-4dgs
+git pull --ff-only
+bash scripts/rebuild_training_cuda.sh
+```
+
+This rebuilds the pinned `gsplat` and `fused-ssim` extensions without cached
+native wheels, then tests packed rasterization, gradients and fused SSIM in a
+fresh process. It retains model weights and jobs. The command can take several
+minutes to compile. A failed GPU test remains an error; the app does not bypass
+the rasterizer check or claim that reconstruction is ready.
 
 The web server and CPU tests do not need CUDA:
 

@@ -10,5 +10,5 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -e '.[test]'
       - run: python -m pytest -q
-      - run: bash -n scripts/setup_runpod.sh scripts/start.sh
+      - run: for script in scripts/*.sh; do bash -n "$script"; done
       - run: python -m compileall -q person4d scripts
