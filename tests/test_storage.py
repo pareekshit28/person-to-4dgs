@@ -59,8 +59,38 @@ def test_permission_error_is_actionable_and_probe_is_cleaned(tmp_path, monkeypat
         raise PermissionError(errno.EPERM, "Operation not permitted")
 
     monkeypatch.setattr(storage.os, "chmod", denied)
-    with pytest.raises(storage.StorageError, match="chmod and symlinks"):
+    with pytest.raises(storage.StorageError, match="chmod and symlinks") as caught:
         storage.probe_runtime(tmp_path)
+    assert "Global Volume" not in str(caught.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux executable and symlink semantics")
+def test_normalized_network_permissions_allow_runtime_execution(tmp_path, monkeypatch):
+    real_chmod = storage.os.chmod
+    observed_modes = []
+
+    def normalized(path, requested_mode, *args, **kwargs):
+        real_chmod(path, 0o777, *args, **kwargs)
+        observed_modes.append(Path(path).stat().st_mode & 0o777)
+
+    monkeypatch.setattr(storage.os, "chmod", normalized)
+    storage.check_storage(tmp_path / "runtime", tmp_path / "data")
+    assert observed_modes and all(mode == 0o777 for mode in observed_modes)
+    assert list((tmp_path / "runtime").iterdir()) == []
+    assert list((tmp_path / "data").iterdir()) == []
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux execution errors")
+def test_noexec_error_identifies_execution_without_misclassifying_volume(tmp_path, monkeypatch):
+    def denied(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(storage.subprocess, "run", denied)
+    with pytest.raises(storage.StorageError, match="cannot execute a test script") as caught:
+        storage.probe_runtime(tmp_path)
+    assert "noexec" in str(caught.value)
+    assert "Global Volume" not in str(caught.value)
     assert list(tmp_path.iterdir()) == []
 
 
@@ -70,8 +100,9 @@ def test_replacement_error_is_actionable_and_probe_is_cleaned(tmp_path, monkeypa
         raise OSError(errno.EOPNOTSUPP, "Operation not supported")
 
     monkeypatch.setattr(storage.os, "replace", denied)
-    with pytest.raises(storage.StorageError, match="file locks and replacement"):
+    with pytest.raises(storage.StorageError, match="file locks and replacement") as caught:
         storage.probe_data(tmp_path)
+    assert "Global Volume" not in str(caught.value)
     assert list(tmp_path.iterdir()) == []
 
 

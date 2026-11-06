@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path, PurePosixPath
 import re
-import stat
+import subprocess
 import sys
 import tempfile
 
@@ -67,24 +67,41 @@ def reject_object_storage(path: str | Path, role: str, mounts: list[Mount]) -> N
 
 
 def probe_runtime(path: Path) -> None:
-    """Exercise permissions and symlinks inside one disposable owned directory."""
+    """Check execution and symlinks without requiring exact Unix mode bits."""
     try:
         path.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".person4d-storage-check-", dir=path) as temporary:
             root = Path(temporary)
             target = root / "permission-check"
-            target.write_bytes(b"runtime-check")
-            for mode in (0o700, 0o600):
-                os.chmod(target, mode)
-                if stat.S_IMODE(target.stat().st_mode) != mode:
-                    raise StorageError(f"Runtime storage at {path} does not preserve permission bits. {REMEDY}")
+            script = b"#!/bin/sh\nprintf 'person4d-runtime-check\\n'\n"
+            target.write_bytes(script)
+            # Some network filesystems normalize mode bits (for example to
+            # 0777). Git and Python need chmod to succeed and files to execute;
+            # they do not require stat() to return the exact requested mode.
+            os.chmod(target, 0o700)
+            try:
+                completed = subprocess.run(
+                    [str(target)], check=True, capture_output=True, timeout=10,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise StorageError(
+                    f"Runtime storage at {path} cannot execute a test script: {exc}. "
+                    "Check this mount's execution permissions (including noexec), "
+                    "or use another executable filesystem for the installation."
+                ) from None
+            if completed.stdout != b"person4d-runtime-check\n":
+                raise StorageError(f"Runtime execution check at {path} returned unexpected output.")
             link = root / "symlink-check"
             link.symlink_to(target.name)
-            if not link.is_symlink() or link.read_bytes() != b"runtime-check":
-                raise StorageError(f"Runtime storage at {path} does not support working symlinks. {REMEDY}")
+            if not link.is_symlink() or link.read_bytes() != script:
+                raise StorageError(
+                    f"Runtime storage at {path} does not support working symlinks. "
+                    "Check the mount's symlink support or use another runtime filesystem."
+                )
     except OSError as exc:
         raise StorageError(
-            f"Runtime storage at {path} must support chmod and symlinks: {exc.strerror or exc}. {REMEDY}"
+            f"Runtime storage at {path} must support chmod and symlinks: {exc.strerror or exc}. "
+            "Check the mount's permissions and symlink support, or use another runtime filesystem."
         ) from None
 
 
@@ -104,7 +121,10 @@ def probe_data(path: Path) -> None:
                     pass
                 else:
                     fcntl.flock(second, fcntl.LOCK_UN)
-                    raise StorageError(f"Active data storage at {path} does not enforce file locks. {REMEDY}")
+                    raise StorageError(
+                        f"Active data storage at {path} does not enforce file locks. "
+                        "Check locking support on this mount before using it for active jobs."
+                    )
                 fcntl.flock(first, fcntl.LOCK_UN)
                 fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fcntl.flock(second, fcntl.LOCK_UN)
@@ -113,10 +133,14 @@ def probe_data(path: Path) -> None:
             replacement.write_bytes(b"new-state")
             os.replace(replacement, destination)
             if destination.read_bytes() != b"new-state" or replacement.exists():
-                raise StorageError(f"Active data storage at {path} does not support file replacement. {REMEDY}")
+                raise StorageError(
+                    f"Active data storage at {path} does not support file replacement. "
+                    "Choose active job storage that supports same-directory replacement."
+                )
     except OSError as exc:
         raise StorageError(
-            f"Active data storage at {path} must support file locks and replacement: {exc.strerror or exc}. {REMEDY}"
+            f"Active data storage at {path} must support file locks and replacement: {exc.strerror or exc}. "
+            "Check those operations and write permissions on this mount."
         ) from None
 
 

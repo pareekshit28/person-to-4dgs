@@ -60,7 +60,10 @@ survives restart; `PERSON4D_TOKEN` can supply your own value.
 
 The first setup installs two separate GPU environments and compiles/executes a
 small rasterizer check. It first validates the active storage and stops with a
-specific error on incompatible mounts. Keep the terminal open until it completes. Re-running
+specific error on incompatible mounts. Network volumes that normalize Unix
+permission bits are accepted when execution, symlinks, locks and file
+replacement work; exact `chmod` mode preservation is not required.
+Keep the terminal open until it completes. Re-running
 setup reuses installed environments and download caches. Public weights can
 also be downloaded during installation with `--with-models`.
 
