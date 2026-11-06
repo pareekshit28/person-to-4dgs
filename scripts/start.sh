@@ -4,6 +4,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 if [[ ! -x .venv/bin/python ]]; then echo 'Run bash scripts/setup_runpod.sh first.' >&2; exit 1; fi
 export PERSON4D_DATA_DIR="${PERSON4D_DATA_DIR:-$ROOT/data}"
+.venv/bin/python "$ROOT/scripts/check_storage.py" --runtime "$ROOT" --data "$PERSON4D_DATA_DIR"
 mkdir -p "$PERSON4D_DATA_DIR"
 mkdir -p "$PERSON4D_DATA_DIR/tmp"
 export TMPDIR="$PERSON4D_DATA_DIR/tmp"

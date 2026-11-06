@@ -12,19 +12,39 @@ weights download onto your pod. SMPL-X is supplied separately by the user.
 ## Run on RunPod
 
 Recommended for the default high-quality recipe: **one H200 GPU** with a
-CUDA 12.8 development container, **200 GB or more persistent disk**, 16+ CPU
-cores and 64+ GB system RAM. An H100 80 GB is a useful alternative. The upstream
+CUDA 12.8 development container, **150 GB persistent disk for an initial job**,
+16+ CPU cores and 64+ GB system RAM. An H100 80 GB or RTX PRO 6000 Blackwell
+96 GB is an alternative; 200 GB provides more room for retained jobs. The upstream
 generation benchmark reports its fastest tested single-GPU results on H200;
 this app's complete reconstruction runtime has not yet been measured.
 
 Use the container image:
 
 ```text
-runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu
+runpod/pytorch:1.5.0-cu1281-torch280-ubuntu2404
 ```
 
-Expose **HTTP port 8000** in the pod configuration. Attach persistent storage at
-`/workspace`, open the pod terminal, then run:
+Expose **HTTP port 8000** in the pod configuration. Attach a standard
+**Network Volume** or **Volume Disk** at `/workspace`. Use a 20 GB or larger
+container disk for system packages and local Python tooling. The application,
+GPU environments, models and job data live on the persistent filesystem.
+
+**Global Volumes / GeeseFS cannot host the active application.** Object-backed
+storage lacks the permissions, locks and atomic operations required by Git,
+Python environments and the job/checkpoint machinery. A mount at `/workspace`
+does not imply it is a standard filesystem. Check it before cloning:
+
+```bash
+findmnt -T /workspace -o TARGET,SOURCE,FSTYPE,OPTIONS
+df -h / /workspace
+```
+
+If this reports `fuse.geesefs`, provision a Network Volume or Volume Disk and
+deploy the pod with that storage. Increasing a Global Volume's capacity does
+not fix its filesystem behavior. Keep the global volume for copied artifacts
+or read-mostly files. See [RunPod's storage explanation](https://www.runpod.io/blog/global-volumes-arent-network-volumes).
+
+Once `/workspace` uses suitable storage, run:
 
 ```bash
 cd /workspace
@@ -39,7 +59,8 @@ token printed by `start.sh`. The token is retained in `data/access-token` so it
 survives restart; `PERSON4D_TOKEN` can supply your own value.
 
 The first setup installs two separate GPU environments and compiles/executes a
-small rasterizer check. Keep the terminal open until it completes. Re-running
+small rasterizer check. It first validates the active storage and stops with a
+specific error on incompatible mounts. Keep the terminal open until it completes. Re-running
 setup reuses installed environments and download caches. Public weights can
 also be downloaded during installation with `--with-models`.
 

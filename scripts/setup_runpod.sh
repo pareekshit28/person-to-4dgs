@@ -15,6 +15,8 @@ for arg in "$@"; do
 done
 case "$ATTENTION" in auto|sage|sdpa) ;; *) echo 'Invalid attention choice' >&2; exit 2;; esac
 if [[ "$(uname -s)" != Linux ]]; then echo 'GPU setup requires a Linux CUDA RunPod container.' >&2; exit 1; fi
+export PERSON4D_DATA_DIR="${PERSON4D_DATA_DIR:-$ROOT/data}"
+python3 "$ROOT/scripts/check_storage.py" --runtime "$ROOT" --data "$PERSON4D_DATA_DIR"
 if ! command -v nvidia-smi >/dev/null; then echo 'NVIDIA GPU/driver not found. Start this script inside your GPU pod.' >&2; exit 1; fi
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 export PATH="$CUDA_HOME/bin:$HOME/.local/bin:$PATH"
@@ -33,7 +35,6 @@ if ! command -v uv >/dev/null; then
   curl -LsSf https://astral.sh/uv/0.9.5/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
 fi
-export PERSON4D_DATA_DIR="${PERSON4D_DATA_DIR:-$ROOT/data}"
 mkdir -p "$PERSON4D_DATA_DIR" "$PERSON4D_DATA_DIR/cache" "$PERSON4D_DATA_DIR/tmp" "$ROOT/.venvs"
 export HF_HOME="${HF_HOME:-$PERSON4D_DATA_DIR/cache/huggingface}"
 export TORCH_HOME="${TORCH_HOME:-$PERSON4D_DATA_DIR/cache/torch}"
