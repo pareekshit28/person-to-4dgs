@@ -36,8 +36,33 @@ def test_auth_precedes_file_access_and_cookie_login(app_setup):
         assert "httponly" in logged_in.headers["set-cookie"].lower()
         assert client.get("/api/jobs").status_code == 200
         assert client.post("/api/setup/models", headers={"Origin": "https://attacker.example"}).status_code == 403
-        client.post("/api/logout")
+        assert client.post("/api/logout", headers={"Origin": "http://testserver"}).status_code == 200
         assert client.get("/api/jobs").status_code == 401
+
+
+def test_runpod_proxy_origin_with_rewritten_host(app_setup, monkeypatch):
+    settings, manager, _ = app_setup
+    monkeypatch.setenv("RUNPOD_POD_ID", "testpod")
+    app = create_app(settings, manager)
+    origin = f"https://testpod-{settings.port}.proxy.runpod.net"
+    with TestClient(app, base_url=f"http://10.0.0.2:{settings.port}") as client:
+        logged_in = client.post("/api/login", headers={"Origin": origin}, json={"token": "test-secret"})
+        assert logged_in.status_code == 200
+        cookie = logged_in.headers["set-cookie"].lower()
+        assert "; secure" in cookie and "samesite=strict" in cookie
+
+        # The public HTTPS connection supplies the Secure cookie to the proxy.
+        session = {"Cookie": f"person4d_session={logged_in.cookies['person4d_session']}"}
+        assert client.get("/api/auth", headers=session).json()["authenticated"] is True
+        for untrusted_origin in (
+            f"https://otherpod-{settings.port}.proxy.runpod.net",
+            f"https://testpod-{settings.port + 1}.proxy.runpod.net",
+            origin.replace("https://", "http://"),
+            "https://attacker.example",
+        ):
+            headers = {**session, "Origin": untrusted_origin, "X-Forwarded-Host": untrusted_origin.split("://")[1]}
+            assert client.post("/api/logout", headers=headers).status_code == 403
+        assert client.post("/api/logout", headers={**session, "Origin": origin}).status_code == 200
 
 
 def test_artifact_range_and_traversal_restriction(app_setup):

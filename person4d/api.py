@@ -10,7 +10,6 @@ import threading
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -67,6 +66,9 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
     setup_state = {"state": "idle", "kind": None, "message": "", "error": None, "log": ""}
     state_lock = threading.Lock()
     session_value = hmac.new(settings.token.encode(), b"person4d-session-v1", hashlib.sha256).hexdigest()
+    # RunPod rewrites Host. Derive the public origin from the Pod's identity.
+    pod_id = os.environ.get("RUNPOD_POD_ID", "").lower()
+    runpod_origin = f"https://{pod_id}-{settings.port}.proxy.runpod.net" if pod_id else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -102,11 +104,10 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
             return JSONResponse({"detail": "Sign in with the access token from your RunPod terminal."}, status_code=401)
         # A cookie authenticates same-origin browser use. Cross-site mutation is denied.
         if request.method not in ("GET", "HEAD", "OPTIONS"):
-            origin = request.headers.get("origin")
-            if origin:
-                parsed = urlparse(origin)
-                if parsed.netloc.lower() != request.headers.get("host", "").lower() or parsed.scheme not in ("http", "https"):
-                    return JSONResponse({"detail": "Cross-origin requests are not allowed."}, status_code=403)
+            origin = request.headers.get("origin", "").lower()
+            host = request.headers.get("host", "").lower()
+            if origin and origin not in (f"http://{host}", f"https://{host}", runpod_origin):
+                return JSONResponse({"detail": "Cross-origin requests are not allowed."}, status_code=403)
             try:
                 content_length = int(request.headers.get("content-length", "0"))
             except ValueError:
@@ -134,7 +135,11 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
             raise HTTPException(401, "Incorrect access token")
         response = JSONResponse({"authenticated": True})
         forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
-        response.set_cookie("person4d_session", session_value, httponly=True, secure=request.url.scheme == "https" or forwarded == "https", samesite="strict", max_age=604800, path="/")
+        secure = (
+            request.url.scheme == "https" or forwarded == "https"
+            or request.headers.get("origin", "").lower() == runpod_origin
+        )
+        response.set_cookie("person4d_session", session_value, httponly=True, secure=secure, samesite="strict", max_age=604800, path="/")
         return response
 
     @app.post("/api/logout")
