@@ -170,8 +170,9 @@ displays the detected GPU and any memory warning.
 Use a sharp, well-lit, preferably 1080p-or-higher full-body source, with the
 person visible throughout the selected action and little motion blur. Current
 generation produces **121 frames at 704 × 1280**; higher source resolution does
-not make the generated views native 1080p. At 24 FPS, supply at least 5.05 seconds
-after the selected start; at 30 FPS, at least 4.04 seconds.
+not make the generated views native 1080p. Choose the frame rate in
+**Advanced settings**. After the selected start, allow at least 10.09 seconds
+at 12 FPS, 5.05 seconds at 24 FPS, or 4.04 seconds at 30 FPS.
 
 The selected performance is preserved in time. Novel views of unobserved
 surfaces are generated estimates, and loose garments, hair, hands, occlusions

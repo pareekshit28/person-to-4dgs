@@ -86,7 +86,24 @@
                     <input id="custom-steps" type="number" min="1000" max="100000" step="1" placeholder="1,000–100,000" required disabled>
                   </div>
                 </div>
-                <details class="advanced-options"><summary>Advanced settings<svg><use href="#i-plus"/></svg></summary><div class="advanced-grid"><div><label class="field-label" for="target-fps">Frame rate</label><select id="target-fps" name="target_fps"><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="30">30 FPS</option></select></div><div><label class="field-label" for="seed">Seed</label><input id="seed" name="seed" type="number" value="42" min="0" max="2147483647" step="1"></div></div></details>
+                <details class="advanced-options">
+                  <summary>Advanced settings<svg><use href="#i-plus"/></svg></summary>
+                  <div class="advanced-grid">
+                    <div>
+                      <label class="field-label" for="target-fps">Frame rate</label>
+                      <select id="target-fps" name="target_fps">
+                        <option value="12">12 FPS</option>
+                        <option value="24" selected>24 FPS</option>
+                        <option value="25">25 FPS</option>
+                        <option value="30">30 FPS</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="field-label" for="seed">Seed</label>
+                      <input id="seed" name="seed" type="number" value="42" min="0" max="2147483647" step="1">
+                    </div>
+                  </div>
+                </details>
                 <div id="upload-progress" class="upload-progress" hidden><div><span id="upload-label">Uploading video</span><strong id="upload-percent">0%</strong></div><progress id="upload-bar" max="100" value="0"></progress></div>
                 <button id="submit-job" type="submit" class="button primary run-button" disabled><svg><use href="#i-orbit"/></svg><span>Reconstruct in 4D</span><svg class="end-icon"><use href="#i-arrow"/></svg></button>
                 <p id="submit-help" class="submit-help">Upload a video to get started.</p>
