@@ -1528,6 +1528,8 @@ class FreeTime4DRunner:
         height: int,
         t: float,
         sh_degree: int,
+        *,
+        viewmats: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         """
@@ -1561,7 +1563,7 @@ class FreeTime4DRunner:
             scales=scales,
             opacities=opacities,
             colors=colors,
-            viewmats=torch.linalg.inv(camtoworlds),
+            viewmats=torch.linalg.inv(camtoworlds) if viewmats is None else viewmats,
             Ks=Ks,
             width=width,
             height=height,
@@ -1788,6 +1790,19 @@ class FreeTime4DRunner:
                 yaml.dump(vars(cfg), f, default_flow_style=False)
 
         max_steps = cfg.max_steps
+        strategy = cfg.strategy
+        uses_default_strategy = isinstance(strategy, DefaultStrategy)
+        default_strategy_end = 0
+        if uses_default_strategy and (
+            strategy.refine_start_iter + 1 < strategy.refine_stop_iter
+            or strategy.reset_every < strategy.refine_stop_iter
+        ):
+            default_strategy_end = strategy.refine_stop_iter
+
+        # The normalized camera rig is fixed for training. Cache its inverses
+        # once instead of synchronizing the GPU to invert one pose every step.
+        camera_poses = torch.as_tensor(self.parser.camtoworlds, dtype=torch.float32, device=device)
+        camera_views = torch.linalg.inv(camera_poses).contiguous()
 
         # Absolute iteration sampling and a separate loader RNG survive prefetch
         # and avoid consuming the restored background/relocation RNG on restart.
@@ -1856,14 +1871,17 @@ class FreeTime4DRunner:
             in_settling = step < cfg.densification_start_step  # Steps 0-1000: settling
             policy = apply_phase(self, step)
             in_refinement = step >= cfg.densification_start_step and policy.allow_relocation
+            use_default_strategy = in_refinement and step < default_strategy_end
             vel_lr = self.optimizers["velocities"].param_groups[0]["lr"]
 
             # SH degree schedule
             sh_degree = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # Forward pass (vanilla FreeTimeGS: always 4D, no static mode)
+            camera_idx = int(data["camera_idx"].item())
             renders, alphas, info = self.rasterize_splats(
                 camtoworlds, Ks, width, height, t, sh_degree,
+                viewmats=camera_views[camera_idx:camera_idx + 1],
             )
             colors = renders[..., :3]
 
@@ -1871,21 +1889,23 @@ class FreeTime4DRunner:
             # Explicit alpha supervision removes the black-background ambiguity.
             alpha_loss = colors.new_zeros(())
             bkgd = torch.rand(1, 3, device=device) if cfg.random_bkgd else colors.new_zeros(1, 3)
-            if cfg.alpha_mode == "transparent":
+            target_alpha = data["alpha"].to(device, non_blocking=True) if cfg.alpha_mode == "transparent" else None
+            if target_alpha is not None:
                 colors, pixels, alpha_loss = composite_foreground(
-                    colors, alphas, pixels, data["alpha"].to(device, non_blocking=True), bkgd,
+                    colors, alphas, pixels, target_alpha, bkgd,
                 )
             elif cfg.random_bkgd:
                 colors = colors + bkgd * (1.0 - alphas)
 
-            # Strategy pre-backward (for gradient accumulation)
-            self.cfg.strategy.step_pre_backward(
-                params=self.splats,
-                optimizers=self.optimizers,
-                state=self.strategy_state,
-                step=step,
-                info=info,
-            )
+            # A disabled default strategy never consumes image-plane gradients.
+            if use_default_strategy or not uses_default_strategy:
+                strategy.step_pre_backward(
+                    params=self.splats,
+                    optimizers=self.optimizers,
+                    state=self.strategy_state,
+                    step=step,
+                    info=info,
+                )
 
             # ============================================================
             # LOSS COMPUTATION (Paper: L = λimg*L1 + λssim*SSIM + λperc*LPIPS + λreg*Lreg)
@@ -1910,8 +1930,9 @@ class FreeTime4DRunner:
             if use_lpips:
                 self.lpips.reset()
 
-            foreground_loss = (foreground_mse_loss(colors, pixels, data["alpha"].to(device))
-                               if policy.foreground_mse_weight > 0 else colors.new_zeros(()))
+            foreground_loss = (foreground_mse_loss(colors, pixels, target_alpha)
+                               if target_alpha is not None and policy.foreground_mse_weight > 0
+                               else colors.new_zeros(()))
 
             # 4. 4D Regularization (paper: λreg=1e-2) - after initial settling
             # Lreg(t) = (1/N) * Σ(σ * sg[σ(t)]) - stop-gradient on temporal opacity
@@ -1945,12 +1966,12 @@ class FreeTime4DRunner:
             # Backward
             loss.backward()
 
-            # Accumulate gradients for relocation sampling score (always, for when relocation starts)
-            if "means" in self.splats and self.splats["means"].grad is not None:
-                grad_mag = self.splats["means"].grad.norm(dim=-1)
-                if len(self.grad_accum) == len(grad_mag):
-                    self.grad_accum += grad_mag
-                    self.grad_count += 1
+            # Accumulate before relocation starts as well as while it is active.
+            means_grad = self.splats["means"].grad
+            if (cfg.use_relocation and step < cfg.relocation_stop_iter
+                    and means_grad is not None and len(self.grad_accum) == len(means_grad)):
+                self.grad_accum += means_grad.norm(dim=-1)
+                self.grad_count += 1
 
             # Optimizer step
             for opt in self.optimizers.values():
@@ -1982,8 +2003,8 @@ class FreeTime4DRunner:
                                 print(f"[Relocation] Step {step}: relocated {n_relocated}")
 
                 # Strategy post-backward (DefaultStrategy/MCMCStrategy operations)
-                if isinstance(self.cfg.strategy, DefaultStrategy):
-                    self.cfg.strategy.step_post_backward(
+                if use_default_strategy:
+                    strategy.step_post_backward(
                         params=self.splats,
                         optimizers=self.optimizers,
                         state=self.strategy_state,
@@ -1991,8 +2012,8 @@ class FreeTime4DRunner:
                         info=info,
                         packed=cfg.packed,
                     )
-                elif isinstance(self.cfg.strategy, MCMCStrategy):
-                    self.cfg.strategy.step_post_backward(
+                elif isinstance(strategy, MCMCStrategy):
+                    strategy.step_post_backward(
                         params=self.splats,
                         optimizers=self.optimizers,
                         state=self.strategy_state,

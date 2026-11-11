@@ -117,4 +117,28 @@ def test_views_and_steps_are_independent(app_setup, monkeypatch):
         assert job["recipe"]["layer_pitches"] == [15]
         assert job["recipe"]["data_factor"] == 1
         assert job["recipe"]["max_points"] == 2_000_000
+        assert job["recipe"]["voxel_size"] == 0.016
         assert client.post("/api/jobs", files=video, data={"views": "13", "steps": "50000"}).status_code == 422
+
+
+@pytest.mark.parametrize(("preset", "views", "steps"), [
+    ("preview", 12, 8000),
+    ("balanced", 24, 30000),
+    ("quality", 48, 50000),
+])
+def test_new_jobs_using_legacy_presets_share_reconstruction_settings(app_setup, monkeypatch, preset, views, steps):
+    _, _, app = app_setup
+    monkeypatch.setattr("person4d.api.system_state", lambda *_: {"readiness": True})
+    with TestClient(app, headers={"Authorization": "Bearer test-secret"}) as client:
+        response = client.post(
+            "/api/jobs",
+            files={"file": ("person.mp4", b"video", "video/mp4")},
+            data={"preset": preset},
+        )
+        assert response.status_code == 201
+        recipe = response.json()["recipe"]
+        assert recipe["views_per_layer"] * len(recipe["layer_pitches"]) == views
+        assert recipe["steps"] == steps
+        assert recipe["data_factor"] == 1
+        assert recipe["max_points"] == 2_000_000
+        assert recipe["voxel_size"] == 0.016

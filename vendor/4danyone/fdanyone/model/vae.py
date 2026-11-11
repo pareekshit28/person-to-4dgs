@@ -265,7 +265,7 @@ class VaeExecutor:
                 video_root / f"{camera_id:02d}.mp4",
                 fps,
                 crf=INFERENCE.target_h264_crf,
-                preset=INFERENCE.h264_preset,
+                preset=INFERENCE.target_h264_preset,
             )
 
         return self._decode_and_publish(latents, publish)

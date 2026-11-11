@@ -24,8 +24,10 @@ class InferenceConfig:
     )
     temporal_sampling_policy: str = "nearest_source_pts_on_zero_based_cfr_clock"
     skeleton_h264_crf: int = 17
-    target_h264_crf: int = 18
     h264_preset: str = "medium"
+    # Target frames are also the color supervision for reconstruction.
+    target_h264_crf: int = 12
+    target_h264_preset: str = "veryfast"
     skeleton_max_dimension: int = 2048
     tiled_vae: bool = False
     vae_tile_size: tuple[int, int] = (52, 30)

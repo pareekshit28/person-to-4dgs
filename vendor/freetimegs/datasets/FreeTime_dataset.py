@@ -625,12 +625,13 @@ class FreeTimeDataset:
             image = image[..., :3]
         # Transform RGB and soft alpha together to keep their pixel coordinates
         # identical through resizing, camera undistortion and random cropping.
-        image = cv2.resize(
-            image,
-            dsize=(image.shape[1] // self.parser.factor,
-                   image.shape[0] // self.parser.factor),
-            interpolation=cv2.INTER_LINEAR
-        )
+        if self.parser.factor != 1:
+            image = cv2.resize(
+                image,
+                dsize=(image.shape[1] // self.parser.factor,
+                       image.shape[0] // self.parser.factor),
+                interpolation=cv2.INTER_LINEAR,
+            )
 
         camera_id = self.parser.camera_ids[cam_idx]
         K = self.parser.Ks_dict[camera_id].copy()

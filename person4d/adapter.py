@@ -26,7 +26,7 @@ import numpy as np
 from PIL import Image
 
 
-ADAPTER_VERSION = 1
+ADAPTER_VERSION = 2
 EXPECTED_FRAMES = 121
 
 
@@ -251,7 +251,8 @@ def _save_rgba(path: Path, rgb: np.ndarray, alpha: np.ndarray) -> None:
     if area < 0.0001 or area > 0.995:
         raise ValueError(f"Unusable foreground mask for {path.name}: {area:.3%} foreground. Inspect the generated view.")
     temporary = path.with_name(path.name + ".tmp")
-    Image.fromarray(np.concatenate((rgb, alpha[..., None]), axis=2), "RGBA").save(temporary, format="PNG")
+    rgba = Image.fromarray(np.concatenate((rgb, alpha[..., None]), axis=2), "RGBA")
+    rgba.save(temporary, format="PNG", compress_level=3)
     os.replace(temporary, path)
 
 
@@ -417,8 +418,9 @@ def silhouette_bounds(cameras: list[dict], masks: np.ndarray) -> tuple[np.ndarra
 
 
 def point_colors(points: np.ndarray, images: list[np.ndarray], masks: np.ndarray,
-                 projections: np.ndarray) -> np.ndarray:
+                 projections: np.ndarray, voxel_size: float) -> np.ndarray:
     sums, counts = np.zeros_like(points, dtype=np.float32), np.zeros((len(points), 1), dtype=np.float32)
+    visible_sums, visible_counts = np.zeros_like(sums), np.zeros_like(counts)
     homogeneous = np.concatenate((points, np.ones((len(points), 1))), axis=1)
     height, width = masks.shape[1:]
     for image, mask, projection in zip(images, masks, projections, strict=True):
@@ -428,10 +430,32 @@ def point_colors(points: np.ndarray, images: list[np.ndarray], masks: np.ndarray
         valid = positive & (pixels[:, 0] >= 0) & (pixels[:, 0] < width) & (pixels[:, 1] >= 0) & (pixels[:, 1] < height)
         ids = np.flatnonzero(valid)
         ids = ids[mask[pixels[ids, 1], pixels[ids, 0]]]
-        sums[ids] += image[pixels[ids, 1], pixels[ids, 0]]
+        if not len(ids):
+            continue
+        u, v = pixels[ids].T
+        colors = image[v, u]
+        sums[ids] += colors
         counts[ids] += 1
+
+        # Pool depths over approximately one projected voxel so nearby rays
+        # can reject colors from points hidden behind the hull's front surface.
+        depths = projected[ids, 2]
+        focal = np.linalg.norm(np.cross(projection[:2, :3], projection[2, :3]), axis=1).max()
+        cell_size = max(1, math.ceil(focal * voxel_size / np.median(depths)))
+        cells_x = (width + cell_size - 1) // cell_size
+        cells_y = (height + cell_size - 1) // cell_size
+        cells = v // cell_size * cells_x + u // cell_size
+        nearest = np.full(cells_x * cells_y, np.inf, dtype=depths.dtype)
+        np.minimum.at(nearest, cells, depths)
+        visible = depths <= nearest[cells] + 2 * voxel_size
+        visible_sums[ids[visible]] += colors[visible]
+        visible_counts[ids[visible]] += 1
+
     if np.any(counts == 0):
         raise ValueError("Geometry contains points without foreground color observations.")
+    has_visible_color = visible_counts[:, 0] > 0
+    sums[has_visible_color] = visible_sums[has_visible_color]
+    counts[has_visible_color] = visible_counts[has_visible_color]
     return (sums / counts / 255).astype(np.float32)
 
 
@@ -447,7 +471,7 @@ def carve_visual_hull(images: list[np.ndarray], masks: np.ndarray, cameras: list
         raise ValueError(f"Carving bounds require {total:,} voxels. Increase --voxel-size or inspect mask bounds.")
     projections = projection_matrices(cameras).astype(np.float32)
     torch_projections = torch.from_numpy(projections).to(device)
-    torch_masks = torch.from_numpy(masks).to(device)
+    torch_masks = torch.from_numpy(masks).to(device).flatten(1)
     torch_axes = [torch.from_numpy(axis).to(device) for axis in axes]
     minimum_views = len(cameras) - int(len(cameras) * mask_tolerance)
     height, width = masks.shape[1:]
@@ -468,9 +492,9 @@ def carve_visual_hull(images: list[np.ndarray], masks: np.ndarray, cameras: list
             pixels = torch.round(projected[..., :2] / depth[..., None].clamp_min(1e-6)).long()
             u, v = pixels[..., 0], pixels[..., 1]
             valid = (depth > 0) & (u >= 0) & (u < width) & (v >= 0) & (v < height)
-            inside = torch.zeros_like(valid)
-            camera_ids, point_ids = torch.nonzero(valid, as_tuple=True)
-            inside[camera_ids, point_ids] = torch_masks[camera_ids, v[camera_ids, point_ids], u[camera_ids, point_ids]]
+            # Invalid projections gather at zero and are then masked out.
+            offsets = torch.where(valid, v * width + u, 0)
+            inside = valid & torch.gather(torch_masks, 1, offsets)
             kept = points[inside.sum(dim=0) >= minimum_views].cpu().numpy()
             found += len(kept)
             if len(kept):
@@ -481,7 +505,7 @@ def carve_visual_hull(images: list[np.ndarray], masks: np.ndarray, cameras: list
                     reservoir, scores = reservoir[selected], scores[selected]
     if found < 100:
         raise ValueError(f"Foreground masks and calibration produced only {found} hull voxels. Inspect generated views and silhouettes.")
-    colors = point_colors(reservoir, images, masks, projections)
+    colors = point_colors(reservoir, images, masks, projections, voxel_size)
     return reservoir, colors
 
 

@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 from filelock import FileLock, Timeout
 
-from .config import PRESETS, VIEW_LAYOUTS, Settings
+from .config import PRESETS, RECONSTRUCTION_DEFAULTS, VIEW_LAYOUTS, Settings
 from .pipeline import Cancelled, Pipeline, atomic_json
 
 
@@ -91,9 +91,14 @@ class JobManager:
 
     def create(self, job_id: str, *, title: str, filename: str, relative_input: str, options: dict, sha256: str) -> dict:
         now = utc_now()
-        preset = PRESETS.get(options.get("preset", "quality"), PRESETS["quality"])
-        views = options.get("views")
-        recipe = copy.deepcopy({**preset, **VIEW_LAYOUTS.get(views, {})})
+        legacy = PRESETS.get(options.get("preset"), PRESETS["quality"])
+        layout = VIEW_LAYOUTS.get(options.get("views"), legacy)
+        recipe = {
+            **RECONSTRUCTION_DEFAULTS,
+            "views_per_layer": layout["views_per_layer"],
+            "layer_pitches": layout["layer_pitches"].copy(),
+            "steps": legacy["steps"],
+        }
         job = {"id": job_id, "title": title.strip()[:100] or Path(filename).stem[:100], "status": "queued", "stage": "queued", "progress": 0, "stage_progress": 0, "message": "Waiting for the GPU", "error": None, "created_at": now, "updated_at": now, "options": options, "recipe": recipe, "input": {"filename": filename, "path": relative_input, "url": f"/api/jobs/{job_id}/files/{quote(relative_input)}", "sha256": sha256, "metadata": None}, "artifacts": []}
         with self._lock:
             if job_id in self._jobs:

@@ -59,7 +59,7 @@ character reconstruction has been validated on every GPU.
 
 ### Installing from source (alternative)
 
-Recommended for the default high-quality recipe: **one H200 GPU** with a
+For the default 48-view, 50,000-step job, use **one H200 GPU** with a
 CUDA 12.8 development container, **150 GB persistent disk for an initial job**,
 16+ CPU cores and 64+ GB system RAM. An H100 80 GB or RTX PRO 6000 Blackwell
 96 GB is an alternative; 200 GB provides more room for retained jobs. The upstream
@@ -139,22 +139,23 @@ retained the persistent volume. The app does not create, stop or bill RunPod pod
 
 | Views | Camera layout |
 | --- | --- |
-| Preview · 12 | One elevation |
-| Balanced · 24 | One elevation |
-| High quality · 48 (default) | Three elevations |
+| 12 | One elevation |
+| 24 | One elevation |
+| 48 (default) | Three elevations |
 
-Pair any view option with **8,000 (Preview)**, **30,000 (Balanced)**,
-**50,000 (High quality, default)**, or a custom budget of 1,000 to 100,000
-training steps. This budget applies to Gaussian reconstruction after view generation.
+Pair any view count with **8,000**, **30,000**, **50,000 (default)**,
+or a custom budget of 1,000 to 100,000 training steps. The view count
+sets camera coverage, and the step budget controls how long the trainer
+optimizes the reconstruction.
 For another job with the same source file, segment, views and seed, the app can
 copy completed views and prepared geometry from a matching job on the same
 data volume. Training uses the step count selected for the new job.
 
-All combinations in the new-job form use a 704 × 1280 training raster and a cap
-of 2,000,000 Gaussians. The foreground masks and geometry determine the seed
-count. The adapter uses a 1.6 cm voxel grid and the trainer starts each Gaussian
-with a standard deviation of half that spacing. More seeds can increase
-training time and memory use.
+Every new job uses the same quality and speed optimizations, including a
+704 × 1280 training raster, a 1.6 cm seed grid, and a cap of 2,000,000 Gaussians.
+The trainer starts each Gaussian with a standard deviation of 0.8 cm.
+The foreground masks and geometry determine the seed count. More seeds can
+increase training time and memory use.
 
 Generation uses 4DAnyone-Turbo, whose upstream comparison reports quality close
 to the Base model with substantially fewer denoising steps. Setup attempts

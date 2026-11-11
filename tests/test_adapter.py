@@ -44,6 +44,14 @@ def qvec_to_rotation(q):
 
 
 class GeometryContractTests(unittest.TestCase):
+    def test_seed_colors_use_visible_side_and_fall_back_for_interior(self):
+        rig = cameras(count=2)
+        points = np.array([[0, .9, .2], [0, .9, -.2], [0, .9, 0]], dtype=np.float32)
+        images = [np.full((16, 12, 3), color, dtype=np.uint8) for color in ([255, 0, 0], [0, 0, 255])]
+        masks = np.ones((2, 16, 12), dtype=bool)
+        colors = adapter.point_colors(points, images, masks, adapter.projection_matrices(rig), 0.016)
+        np.testing.assert_array_equal(colors, [[1, 0, 0], [0, 0, 1], [.5, 0, .5]])
+
     def test_carving_mask_matches_max_filter_at_edges(self):
         alpha = np.zeros((15, 11), dtype=np.uint8)
         alpha[0, 10] = alpha[7, 5] = 128

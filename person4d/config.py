@@ -49,6 +49,15 @@ VIEW_LAYOUTS = {
 }
 
 
+# Every newly submitted job uses these reconstruction settings.
+RECONSTRUCTION_DEFAULTS = {
+    "max_points": 2_000_000,
+    "data_factor": 1,
+    "voxel_size": 0.016,
+}
+
+
+# Historical presets also serve as fallbacks for jobs saved without a recipe.
 PRESETS = {
     "preview": {"label": "Preview", **VIEW_LAYOUTS[12], "steps": 8000, "max_points": 250000, "data_factor": 2, "description": "12 views, 352 × 640 training, 250k initial Gaussians"},
     "balanced": {"label": "Balanced", **VIEW_LAYOUTS[24], "steps": 30000, "max_points": 1000000, "data_factor": 1, "description": "24 views, 704 × 1280 training, 1M initial Gaussians"},
