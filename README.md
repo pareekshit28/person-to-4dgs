@@ -127,8 +127,8 @@ In the UI:
    Download its model archive and upload `models_smplx_v1_1.zip` or
    `SMPLX_NEUTRAL.npz`. The application does not need your SMPL-X credentials.
 3. Upload a clear video containing one person. Select the action's start time.
-4. Choose a preset and start reconstruction. You can close the browser while
-   the server continues processing.
+4. Choose **Views** and **Training steps** independently, then start
+   reconstruction. You can close the browser while the server continues processing.
 5. Open the completed character in the embedded viewer and download
    `character.ftgs.ply` and `playback.json`.
 
@@ -137,11 +137,24 @@ retained the persistent volume. The app does not create, stop or bill RunPod pod
 
 ## Quality and speed
 
-| Preset | Generated camera views | Training raster | Initial Gaussian budget | Default training steps |
-| --- | ---: | --- | ---: | ---: |
-| Preview | 12 | 352 × 640 | 250,000 | 8,000 |
-| Balanced | 24 | 704 × 1280 | 1,000,000 | 30,000 |
-| High detail (default) | 48 across three elevations | 704 × 1280 | 2,000,000 | 50,000 |
+| Views | Camera layout |
+| --- | --- |
+| Preview · 12 | One elevation |
+| Balanced · 24 | One elevation |
+| High quality · 48 (default) | Three elevations |
+
+Pair any view option with **8,000 (Preview)**, **30,000 (Balanced)**,
+**50,000 (High quality, default)**, or a custom budget of 1,000 to 100,000
+training steps. This budget applies to Gaussian reconstruction after view generation.
+For another job with the same source file, segment, views and seed, the app can
+copy completed views and prepared geometry from a matching job on the same
+data volume. Training uses the step count selected for the new job.
+
+All combinations in the new-job form use a 704 × 1280 training raster and a cap
+of 2,000,000 Gaussians. The foreground masks and geometry determine the seed
+count. The adapter uses a 1.6 cm voxel grid and the trainer starts each Gaussian
+with a standard deviation of half that spacing. More seeds can increase
+training time and memory use.
 
 Generation uses 4DAnyone-Turbo, whose upstream comparison reports quality close
 to the Base model with substantially fewer denoising steps. Setup attempts
@@ -150,10 +163,9 @@ cannot be installed. Use `--attention=sdpa` to skip that optional build or
 `--attention=sage` to require it. The generation backend automatically chooses
 the supported low-memory path on GPUs with at most 24 GB.
 
-High detail targets GPUs with at least 80 GB VRAM. Smaller cards can use Preview
-or Balanced, but their memory requirements depend on the clip and rendering
-visibility. These recipes are initial configurations, not measured quality or
-memory guarantees. The UI displays the detected GPU and any memory warning.
+Full-resolution reconstruction targets GPUs with at least 80 GB VRAM. Memory
+requirements depend on the clip and the number of visible Gaussians. The UI
+displays the detected GPU and any memory warning.
 
 Use a sharp, well-lit, preferably 1080p-or-higher full-body source, with the
 person visible throughout the selected action and little motion blur. Current

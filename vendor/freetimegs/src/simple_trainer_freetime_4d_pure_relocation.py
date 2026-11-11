@@ -394,6 +394,9 @@ class Config:
     init_scale: float = 1.0
     """Scale factor for initial Gaussian sizes (computed from KNN distances)."""
 
+    init_scale_world: Optional[float] = None
+    """Initial isotropic Gaussian sigma in dataset world units, overriding KNN."""
+
     init_duration: float = -1.0
     """Initial temporal duration for Gaussians. Smaller = sharper temporal profiles.
     A duration of 0.2 means Gaussian is visible for ~20% of the sequence.
@@ -570,6 +573,9 @@ class Config:
 
     render_traj_n_frames: int = 120
     """Number of frames in the trajectory video."""
+
+    render_traj_final_only: bool = False
+    """Render the trajectory only at the final checkpoint."""
 
     render_traj_fps: int = 30
     """Frames per second for trajectory video."""
@@ -939,6 +945,8 @@ def create_splats_with_optimizers_4d(
     init_data: Dict[str, torch.Tensor],
     scene_scale: float = 1.0,
     device: str = "cuda",
+    *,
+    world_transform: Optional[np.ndarray] = None,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
     """
     Create 4D Gaussian splats with temporal parameters.
@@ -962,10 +970,19 @@ def create_splats_with_optimizers_4d(
 
     N = len(points)
 
-    # Compute scales from KNN
-    dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)
-    dist_avg = torch.sqrt(dist2_avg).clamp(min=1e-6)
-    scales = torch.log(dist_avg * cfg.init_scale).unsqueeze(-1).repeat(1, 3)
+    if cfg.init_scale_world is None:
+        dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)
+        dist_avg = torch.sqrt(dist2_avg).clamp(min=1e-6)
+        scales = torch.log(dist_avg * cfg.init_scale).unsqueeze(-1).repeat(1, 3)
+    else:
+        # Coincident voxels from different timestamps are not spatial neighbors.
+        # The normalization transform is a similarity, with one scale for all axes.
+        scale = cfg.init_scale_world
+        if world_transform is not None:
+            scale *= float(np.linalg.norm(world_transform[:3, 0]))
+        if not math.isfinite(scale) or scale <= 0:
+            raise ValueError("Initial world-space Gaussian scale must be positive and finite")
+        scales = points.new_full((N, 3), math.log(scale))
 
     # Initialize parameters
     quats = torch.zeros((N, 4))
@@ -1137,7 +1154,7 @@ class FreeTime4DRunner:
 
         # Create splats and optimizers
         self.splats, self.optimizers = create_splats_with_optimizers_4d(
-            cfg, init_data, self.scene_scale, self.device
+            cfg, init_data, self.scene_scale, self.device, world_transform=transform,
         )
         print(f"[FreeTime4D] Initialized {len(self.splats['means']):,} Gaussians")
 
@@ -1813,7 +1830,7 @@ class FreeTime4DRunner:
             print(f"[Resume] Resuming training from step {start_step}")
 
         global_tic = time.time()
-        pbar = tqdm.tqdm(range(start_step, max_steps))
+        pbar = tqdm.tqdm(range(start_step, max_steps), initial=start_step, total=max_steps)
 
         for step in pbar:
             # Load batch
@@ -1827,11 +1844,12 @@ class FreeTime4DRunner:
             if data is None:
                 continue
 
-            camtoworlds = data["camtoworld"].to(device)
-            Ks = data["K"].to(device)
-            pixels = data["image"].to(device) / 255.0
+            camtoworlds = data["camtoworld"].to(device, non_blocking=True)
+            Ks = data["K"].to(device, non_blocking=True)
+            pixels = data["image"].to(device, non_blocking=True) / 255.0
             height, width = pixels.shape[1:3]
-            t = data["time"].to(device).mean().item()
+            times = data["time"]
+            t = times.item() if times.numel() == 1 else times.to(device).mean().item()
 
             # Phase determination (Vanilla FreeTimeGS - no static/dynamic split)
             # All Gaussians are 4D from step 0. Only difference is densification timing.
@@ -1855,7 +1873,7 @@ class FreeTime4DRunner:
             bkgd = torch.rand(1, 3, device=device) if cfg.random_bkgd else colors.new_zeros(1, 3)
             if cfg.alpha_mode == "transparent":
                 colors, pixels, alpha_loss = composite_foreground(
-                    colors, alphas, pixels, data["alpha"].to(device), bkgd,
+                    colors, alphas, pixels, data["alpha"].to(device, non_blocking=True), bkgd,
                 )
             elif cfg.random_bkgd:
                 colors = colors + bkgd * (1.0 - alphas)
@@ -2001,12 +2019,14 @@ class FreeTime4DRunner:
                         if n_pruned > 0:
                             print(f"[Prune] Step {step}: removed {n_pruned}, remaining {len(self.splats['means'])}")
 
-            # Progress bar (new phase names)
-            phase = "SETTLE" if in_settling else ("REFINE" if in_refinement else "POLISH")
-            pbar.set_description(
-                f"[{phase}] loss={loss.item():.4f} l1={l1_loss.item():.4f} "
-                f"t={t:.2f} N={len(self.splats['means'])} vel_lr={vel_lr:.1e}"
-            )
+            # Reading CUDA loss scalars synchronizes the training stream.
+            if step == start_step or step % 20 == 0 or step == max_steps - 1:
+                phase = "SETTLE" if in_settling else ("REFINE" if in_refinement else "POLISH")
+                pbar.set_description(
+                    f"[{phase}] loss={loss.item():.4f} l1={l1_loss.item():.4f} "
+                    f"t={t:.2f} N={len(self.splats['means'])} vel_lr={vel_lr:.1e}",
+                    refresh=False,
+                )
 
             # ============================================================
             # TENSORBOARD LOGGING
@@ -2161,10 +2181,11 @@ class FreeTime4DRunner:
                         os.unlink(temporary_checkpoint)
 
                 if self.world_rank == 0:
-                    try:
-                        self.render_traj(step=step)
-                    except Exception as error:
-                        print(f"[Export] Trajectory video failed: {error}")
+                    if not cfg.render_traj_final_only or step == max_steps - 1:
+                        try:
+                            self.render_traj(step=step)
+                        except Exception as error:
+                            print(f"[Export] Trajectory video failed: {error}")
                     ply_steps = cfg.export_ply_steps if cfg.export_ply_steps is not None else cfg.save_steps
                     if cfg.export_ply and (step + 1) in ply_steps:
                         try:
@@ -2184,24 +2205,20 @@ class FreeTime4DRunner:
         cfg = self.cfg
         device = self.device
 
+        sample_every = cfg.eval_sample_every
+        total_frames = len(self.valset)
+        sample_indices = range(0, total_frames, sample_every)
         valloader = torch.utils.data.DataLoader(
-            self.valset, batch_size=1, shuffle=False, collate_fn=skip_none_collate
+            torch.utils.data.Subset(self.valset, sample_indices),
+            batch_size=1, shuffle=False, collate_fn=skip_none_collate,
         )
         metrics = defaultdict(list)
         ellipse_time = 0
         eval_count = 0
 
-        # Sample every N-th frame for faster evaluation
-        sample_every = cfg.eval_sample_every
-        total_frames = len(valloader)
-        eval_frames = total_frames // sample_every
-        print(f"\n[Eval] Step {step}: evaluating {eval_frames} frames (every {sample_every}-th of {total_frames})")
+        print(f"\n[Eval] Step {step}: evaluating {len(sample_indices)} frames (every {sample_every}-th of {total_frames})")
 
-        for i, data in enumerate(valloader):
-            # Skip frames for faster evaluation
-            if i % sample_every != 0:
-                continue
-
+        for i, data in zip(sample_indices, valloader, strict=True):
             # Skip if frame is missing
             if data is None:
                 continue

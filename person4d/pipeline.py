@@ -1,17 +1,20 @@
 """Real subprocess pipeline; web process never imports CUDA libraries."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Callable
 
-from .config import PRESETS, Settings
+from .config import MODEL_FILES, PRESETS, SMPLX_FILE, Settings
 
 
 class Cancelled(RuntimeError):
@@ -132,12 +135,96 @@ class Pipeline:
         env.update(PYTHONPATH=os.pathsep.join(paths), PYTHONUNBUFFERED="1", HF_HOME=str(self.settings.data_dir / "cache/huggingface"), TORCH_HOME=str(self.settings.data_dir / "cache/torch"), CUDA_VISIBLE_DEVICES=os.environ.get("CUDA_VISIBLE_DEVICES", "0"))
         return env
 
+    def preparation_key(self, source: dict, generation_args: list[str], adapter_args: list[str]) -> str | None:
+        """Fingerprint reusable inputs without rereading the uploaded clip or model weights."""
+        sha256 = source.get("sha256", "")
+        if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+            return None
+        cfg = self.settings
+        inputs = [sha256, Path(source["path"]).suffix, generation_args, adapter_args]
+        digest = hashlib.sha256(json.dumps(inputs).encode())
+        try:
+            for name in (*MODEL_FILES, SMPLX_FILE):
+                stat = (cfg.models_dir / name).stat()
+                digest.update(json.dumps([name, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]).encode())
+            source_files = [
+                cfg.root / "person4d/adapter.py",
+                cfg.inference_repo / "requirements.txt",
+                cfg.inference_repo / "inference.py",
+            ]
+            gvhmr = cfg.inference_repo / "third_party/GVHMR"
+            source_suffixes = {".py", ".yaml", ".yml", ".json", ".pt", ".npy", ".npz"}
+            for folder in (cfg.inference_repo / "fdanyone", gvhmr / "hmr4d", gvhmr / "tools"):
+                source_files.extend(
+                    path for path in folder.rglob("*")
+                    if path.suffix in source_suffixes and path.is_file()
+                )
+            for path in sorted(source_files):
+                digest.update(path.relative_to(cfg.root).as_posix().encode())
+                with path.open("rb") as handle:
+                    digest.update(hashlib.file_digest(handle, "sha256").digest())
+            # Bind reuse to the installed inference dependencies, including optional attention backends.
+            script = (
+                "import importlib.metadata as metadata, sys\n"
+                "versions = sorted((d.metadata['Name'] or '', d.version) for d in metadata.distributions())\n"
+                "print(sys.version, versions)"
+            )
+            versions = subprocess.check_output(
+                [str(cfg.inference_python), "-c", script],
+                cwd=cfg.inference_repo,
+                env=self.environment(inference=True),
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            digest.update(versions)
+            return digest.hexdigest()
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    def prepared_job(self, root: Path, key: str) -> Path | None:
+        for markers_path in self.settings.jobs_dir.glob("*/stages.json"):
+            candidate = markers_path.parent
+            if candidate == root or candidate.is_symlink() or markers_path.is_symlink():
+                continue
+            try:
+                markers = json.loads(markers_path.read_text(encoding="utf-8"))
+                if markers["generate"]["preparation_key"] != key or markers["adapter"]["preparation_key"] != key:
+                    continue
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if self.generated_valid(candidate / "generated") and self.dataset_valid(candidate / "dataset"):
+                return candidate
+        return None
+
+    @staticmethod
+    def copy_prepared(source: Path, destination: Path, cancel: threading.Event, *, generated: Path | None = None) -> None:
+        """Publish a private copy so jobs can be resumed and managed independently."""
+        def copy_file(src: str, dst: str) -> str:
+            if cancel.is_set():
+                raise Cancelled("Cancelled while reusing prepared files")
+            return shutil.copy2(src, dst)
+
+        if source.is_symlink() or any(path.is_symlink() for path in source.rglob("*")):
+            raise ValueError("Prepared files must be local to their job")
+        with tempfile.TemporaryDirectory(prefix=".reuse-", dir=destination.parent) as work:
+            staged = Path(work) / destination.name
+            shutil.copytree(source, staged, copy_function=copy_file)
+            if generated is not None:
+                manifest = json.loads((staged / "manifest.json").read_text(encoding="utf-8"))
+                manifest["source"] = str(generated)
+                atomic_json(staged / "manifest.json", manifest)
+            if cancel.is_set():
+                raise Cancelled("Cancelled while reusing prepared files")
+            staged.rename(destination)
+
     def run(self, job: dict, update: Callable[[dict], None], cancel: threading.Event) -> None:
         cfg = self.settings
         root = cfg.jobs_dir / job["id"]
         options = job["options"]
         # Persisted recipes make retries stable if application presets change.
-        preset = job.get("recipe") or PRESETS[options["preset"]]
+        recipe = job.get("recipe") or {}
+        preset = recipe or PRESETS[options["preset"]]
+        seed_voxel_size = recipe.get("voxel_size")
         steps = options.get("steps") or preset["steps"]
         generated, dataset, results = root / "generated", root / "dataset", root / "results"
         log = root / "job.log"
@@ -152,14 +239,29 @@ class Pipeline:
                 raise Cancelled("Cancelled by user")
             update({"stage": name, "stage_progress": None, "message": message})
 
-        def complete(name: str) -> None:
-            markers[name] = {"completed_at": time.time()}
+        def complete(name: str, preparation_key: str | None = None) -> None:
+            marker = {"completed_at": time.time()}
+            if preparation_key is not None:
+                marker["preparation_key"] = preparation_key
+            markers[name] = marker
             atomic_json(markers_path, markers)
 
         def execute(command: list[str], cwd: Path, inference: bool = False, total: int | None = None) -> None:
             run_command(command, cwd=cwd, log_path=log, cancel=cancel, update=update, env=self.environment(inference), total_steps=total)
 
+        def reuse(donor: Path, destination: Path, *, source: Path | None = None) -> bool:
+            try:
+                self.copy_prepared(donor / destination.name, destination, cancel, generated=source)
+                message = f"Copied {destination.name} from job {donor.name}"
+            except (OSError, ValueError, TypeError) as exc:
+                message = f"Could not copy {destination.name}: {exc}"
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(f"\n[reuse] {message}\n")
+            return destination.is_dir()
+
         stage("probe", "Checking the selected video segment")
+        for leftover in root.glob(".reuse-*"):
+            shutil.rmtree(leftover, ignore_errors=True)
         metadata = probe_video(root / job["input"]["path"])
         needed = 121 / options["target_fps"]
         if metadata["duration"] - options["start_time"] < needed - 0.001:
@@ -168,23 +270,73 @@ class Pipeline:
         atomic_json(root / "video.json", metadata)
         complete("probe")
 
+        generation_args = [
+            "--views_per_layer", str(preset["views_per_layer"]),
+            "--layer_pitches", json.dumps(preset["layer_pitches"]),
+            "--yaw_span", "360",
+            "--enable_turbo", "True",
+            "--attention_backend", "auto",
+            "--target_fps", str(options["target_fps"]),
+            "--start_time", str(options["start_time"]),
+            "--model_dir", str(cfg.models_dir),
+            "--gvhmr_root", str(cfg.inference_repo / "third_party/GVHMR"),
+            "--seed", str(options["seed"]),
+        ]
+        adapter_args = [
+            "--model-dir", str(cfg.models_dir),
+            "--views-repo", str(cfg.inference_repo),
+            "--keyframe-step", "3",
+            "--max-points", str(preset["max_points"]),
+            "--voxel-size", str(seed_voxel_size or 0.025),
+            "--seed", str(options["seed"]),
+        ]
+        reused_job = None
+        generation_key = markers.get("generate", {}).get("preparation_key")
+        dataset_key = markers.get("adapter", {}).get("preparation_key")
         stage("generate", "Generating synchronized views with 4DAnyone")
-        generated_valid = self.generated_valid(generated)
-        if not generated_valid:
+        needs_generation = not self.generated_valid(generated)
+        if needs_generation:
+            generation_key = self.preparation_key(job["input"], generation_args, adapter_args)
+            dataset_key = None
+            markers.pop("generate", None)
+            markers.pop("adapter", None)
+            atomic_json(markers_path, markers)
             if generated.exists():
                 # Keep evidence of an incomplete run instead of overwriting it.
                 generated.rename(root / f"generated-incomplete-{int(time.time())}")
-            execute([str(cfg.inference_python), "inference.py", "--video_path", str(root / job["input"]["path"]), "--output_dir", str(generated), "--views_per_layer", str(preset["views_per_layer"]), "--layer_pitches", json.dumps(preset["layer_pitches"]), "--yaw_span", "360", "--enable_turbo", "True", "--attention_backend", "auto", "--target_fps", str(options["target_fps"]), "--start_time", str(options["start_time"]), "--model_dir", str(cfg.models_dir), "--gvhmr_root", str(cfg.inference_repo / "third_party/GVHMR"), "--seed", str(options["seed"])], cfg.inference_repo, inference=True)
+            if generation_key and not dataset.exists():
+                reused_job = self.prepared_job(root, generation_key)
+            if reused_job:
+                stage("generate", "Copying synchronized views from a matching job")
+                if not reuse(reused_job, generated):
+                    reused_job = None
+            if reused_job is None:
+                execute([
+                    str(cfg.inference_python), "inference.py",
+                    "--video_path", str(root / job["input"]["path"]),
+                    "--output_dir", str(generated), *generation_args,
+                ], cfg.inference_repo, inference=True)
             if not self.generated_valid(generated):
                 raise RuntimeError("4DAnyone finished without complete target videos and camera metadata.")
-        complete("generate")
+        complete("generate", generation_key)
 
         stage("adapter", "Extracting foreground frames and initial 4D geometry")
-        if not (dataset / "manifest.json").is_file() or not (dataset / "init.npz").is_file():
-            execute([str(cfg.inference_python), "-m", "person4d.adapter", "--source", str(generated), "--destination", str(dataset), "--model-dir", str(cfg.models_dir), "--views-repo", str(cfg.inference_repo), "--keyframe-step", "3", "--max-points", str(preset["max_points"]), "--voxel-size", "0.025", "--seed", str(options["seed"])], cfg.root, inference=True)
-        if not (dataset / "manifest.json").is_file() or not (dataset / "init.npz").is_file():
+        if not self.dataset_valid(dataset):
+            if reused_job:
+                stage("adapter", "Copying foreground frames and geometry from a matching job")
+                reuse(reused_job, dataset, source=generated)
+            if not self.dataset_valid(dataset):
+                execute([
+                    str(cfg.inference_python), "-m", "person4d.adapter",
+                    "--source", str(generated),
+                    "--destination", str(dataset), *adapter_args,
+                ], cfg.root, inference=True)
+            dataset_key = generation_key
+            if generation_key and not needs_generation and generation_key != self.preparation_key(job["input"], generation_args, adapter_args):
+                dataset_key = None
+        if not self.dataset_valid(dataset):
             raise RuntimeError("Dataset conversion did not publish its completion manifest and initialization.")
-        complete("adapter")
+        complete("adapter", dataset_key)
 
         stage("train", "Optimizing the animated Gaussian character")
         saved = checkpoints(results)
@@ -193,6 +345,10 @@ class Pipeline:
         if latest_step < steps - 1:
             save_steps = sorted(set([min(1000, steps), *range(5000, steps + 1, 5000), steps]))
             command = [str(cfg.training_python), "src/simple_trainer_freetime_4d_pure_relocation.py", "default_keyframe_small", "--data-dir", str(dataset), "--init-npz-path", str(dataset / "init.npz"), "--result-dir", str(results), "--start-frame", "0", "--end-frame", "121", "--max-steps", str(steps), "--max-samples", str(preset["max_points"]), "--data-factor", str(preset["data_factor"]), "--alpha-mode", "transparent", "--random-bkgd", "--packed", "--test-every", "0", "--lambda-foreground", "1.0", "--save-steps", *map(str, save_steps), "--eval-steps", str(steps), "--render-traj-n-frames", "121", "--render-traj-time-frames", "121", "--render-traj-fps", str(options["target_fps"]), "--render-traj-path", "fixed", "--relocation-stop-iter", str(int(steps * 0.9))]
+            command.append("--render-traj-final-only")
+            if seed_voxel_size is not None:
+                # Cover nearby hull voxels at the same timestamp when training starts.
+                command += ["--init-scale-world", str(seed_voxel_size / 2)]
             if latest:
                 command += ["--ckpt-path", str(latest), "--resume-mode", "resume"]
             execute(command, cfg.training_repo, total=steps)
@@ -214,9 +370,13 @@ class Pipeline:
             if not temporary_model.is_file() or temporary_model.stat().st_size < 100:
                 raise RuntimeError("Animated model export did not produce a valid file.")
             temporary_model.replace(model)
-        atomic_json(output / "playback.json", {"fps": options["target_fps"], "frames": 121, "duration_seconds": 121 / options["target_fps"], "format": "FreeTimeGsVanilla FTGS PLY v1", "model": "character.ftgs.ply", "source_start_time": options["start_time"], "preset": options["preset"], "training_steps": steps, "diagnostics": "Training-view diagnostics (no held-out cameras)", "checkpoint": str(latest.relative_to(root)).replace("\\", "/")})
+        atomic_json(output / "playback.json", {"fps": options["target_fps"], "frames": 121, "duration_seconds": 121 / options["target_fps"], "format": "FreeTimeGsVanilla FTGS PLY v1", "model": "character.ftgs.ply", "source_start_time": options["start_time"], "preset": options["preset"], "views": preset["views_per_layer"] * len(preset["layer_pitches"]), "training_steps": steps, "diagnostics": "Training-view diagnostics (no held-out cameras)", "checkpoint": str(latest.relative_to(root)).replace("\\", "/")})
         complete("export")
         update({"stage": "completed", "stage_progress": 100, "message": "Your animated character is ready to view and download."})
+
+    @staticmethod
+    def dataset_valid(root: Path) -> bool:
+        return (root / "manifest.json").is_file() and (root / "init.npz").is_file()
 
     @staticmethod
     def generated_valid(root: Path) -> bool:

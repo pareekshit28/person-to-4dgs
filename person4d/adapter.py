@@ -8,6 +8,7 @@ serialization can also be tested on a machine without CUDA.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from fractions import Fraction
 import gc
@@ -22,7 +23,7 @@ import time
 from typing import Callable, Iterator
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image
 
 
 ADAPTER_VERSION = 1
@@ -249,7 +250,6 @@ def _save_rgba(path: Path, rgb: np.ndarray, alpha: np.ndarray) -> None:
     area = float(np.mean(alpha >= 128))
     if area < 0.0001 or area > 0.995:
         raise ValueError(f"Unusable foreground mask for {path.name}: {area:.3%} foreground. Inspect the generated view.")
-    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     Image.fromarray(np.concatenate((rgb, alpha[..., None]), axis=2), "RGBA").save(temporary, format="PNG")
     os.replace(temporary, path)
@@ -308,6 +308,7 @@ def extract_rgba(videos: list[Path], cameras: list[dict], root: Path, num_frames
     """Resume validated PNGs; source fingerprint binds cached pixels to videos."""
     predictor = None
     completed = 0
+    writer = ThreadPoolExecutor(max_workers=2)
     try:
         for camera, video in zip(cameras, videos, strict=True):
             folder = root / "images" / f"cam{camera['camera_id']:02d}"
@@ -319,9 +320,10 @@ def extract_rgba(videos: list[Path], cameras: list[dict], root: Path, num_frames
                 progress(f"Reusing camera {camera['camera_id']:02d} foreground frames", completed / (len(cameras) * num_frames) * 65)
                 continue
             pending: list[tuple[int, np.ndarray]] = []
+            writes: list[Future[None]] = []
 
             def flush() -> None:
-                nonlocal predictor
+                nonlocal predictor, writes
                 if not pending:
                     return
                 if predictor is None:
@@ -329,8 +331,12 @@ def extract_rgba(videos: list[Path], cameras: list[dict], root: Path, num_frames
                 masks = predictor([image for _, image in pending])
                 if len(masks) != len(pending):
                     raise ValueError("Segmentation did not return one mask per RGB frame.")
-                for (frame_index, rgb), mask in zip(pending, masks, strict=True):
-                    _save_rgba(folder / f"{frame_index:06d}.png", rgb, mask)
+                # Encode the prior batch while the GPU segments this one. Keep
+                # at most one batch of pending writes, even on a slow volume.
+                for write in writes:
+                    write.result()
+                writes = [writer.submit(_save_rgba, folder / f"{frame_index:06d}.png", rgb, mask)
+                          for (frame_index, rgb), mask in zip(pending, masks, strict=True)]
                 pending.clear()
 
             count = 0
@@ -349,12 +355,29 @@ def extract_rgba(videos: list[Path], cameras: list[dict], root: Path, num_frames
                     progress(f"Foreground: camera {camera['camera_id']:02d}, frame {count}/{num_frames}",
                              completed / (len(cameras) * num_frames) * 65)
             flush()
+            for write in writes:
+                write.result()
             if count != num_frames:
                 raise ValueError(f"Generated video {video.name} has {count} frames; expected {num_frames}.")
             progress(f"Foreground complete for camera {camera['camera_id']:02d}", completed / (len(cameras) * num_frames) * 65)
     finally:
+        writer.shutdown()
         if predictor is not None and hasattr(predictor, "close"):
             predictor.close()
+
+
+def _carving_mask(alpha: np.ndarray) -> np.ndarray:
+    """Threshold alpha and dilate by two pixels using a separable 5×5 max."""
+    mask = alpha >= 128
+    vertical = mask.copy()
+    for offset in (1, 2):
+        vertical[offset:] |= mask[:-offset]
+        vertical[:-offset] |= mask[offset:]
+    expanded = vertical.copy()
+    for offset in (1, 2):
+        expanded[:, offset:] |= vertical[:, :-offset]
+        expanded[:, :-offset] |= vertical[:, offset:]
+    return expanded
 
 
 def _rig_target(cameras: list[dict]) -> np.ndarray:
@@ -559,8 +582,7 @@ def convert(source: str | Path, destination: str | Path, model_dir: str | Path,
                     images.append(rgba[..., :3])
                     # Two pixels of carving-only tolerance retains fine features;
                     # training still receives the original soft alpha unchanged.
-                    binary = Image.fromarray((rgba[..., 3] >= 128).astype(np.uint8) * 255).filter(ImageFilter.MaxFilter(5))
-                    masks.append(np.asarray(binary) > 0)
+                    masks.append(_carving_mask(rgba[..., 3]))
                 xyz, rgb = carver(images, np.stack(masks), cameras, budget, voxel_size,
                                   seed + frame, device, mask_tolerance)
                 temporary = cache.with_name(cache.name + ".tmp")

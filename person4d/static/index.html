@@ -63,12 +63,30 @@
             <section class="panel settings-panel" aria-labelledby="settings-heading">
               <div class="panel-heading"><span class="step-number">02</span><h2 id="settings-heading">Reconstruction</h2></div>
               <div class="settings-content"><label class="field-label" for="job-title">Name <span>optional</span></label><input id="job-title" name="title" type="text" maxlength="120" placeholder="e.g. Walking performance" autocomplete="off">
-                <fieldset class="quality-fieldset"><legend class="field-label">Quality</legend>
-                  <label class="quality-option"><input type="radio" name="preset" value="preview"><span class="radio-shape"></span><span class="quality-copy"><strong>Preview</strong><small>A quick first look</small></span><span class="views-count">12 views</span></label>
-                  <label class="quality-option"><input type="radio" name="preset" value="balanced"><span class="radio-shape"></span><span class="quality-copy"><strong>Balanced</strong><small>Detail and training time in balance</small></span><span class="views-count">24 views</span></label>
-                  <label class="quality-option"><input type="radio" name="preset" value="quality" checked><span class="radio-shape"></span><span class="quality-copy"><strong>High quality <span class="recommended">DEFAULT</span></strong><small>Full detail · three camera heights</small></span><span class="views-count">48 views</span></label>
-                </fieldset>
-                <details class="advanced-options"><summary>Advanced settings<svg><use href="#i-plus"/></svg></summary><div class="advanced-grid"><div><label class="field-label" for="target-fps">Frame rate</label><select id="target-fps" name="target_fps"><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="30">30 FPS</option></select></div><div><label class="field-label" for="seed">Seed</label><input id="seed" name="seed" type="number" value="42" min="0" max="2147483647" step="1"></div><div class="full-width"><label class="field-label" for="steps">Training steps <span>optional</span></label><input id="steps" name="steps" type="number" min="1000" max="100000" step="100" placeholder="Use preset default"><p class="field-help">More steps take longer. Start with the preset.</p></div></div></details>
+                <div class="reconstruction-options">
+                  <div>
+                    <label class="field-label" for="view-count">Views</label>
+                    <select id="view-count" name="views">
+                      <option value="12">Preview · 12 views</option>
+                      <option value="24">Balanced · 24 views</option>
+                      <option value="48" selected>High quality · 48 views</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="field-label" for="training-steps">Training steps</label>
+                    <select id="training-steps" name="steps">
+                      <option value="8000">Preview · 8,000</option>
+                      <option value="30000">Balanced · 30,000</option>
+                      <option value="50000" selected>High quality · 50,000</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </div>
+                  <div id="custom-steps-field" hidden>
+                    <label class="field-label" for="custom-steps">Custom training steps</label>
+                    <input id="custom-steps" type="number" min="1000" max="100000" step="1" placeholder="1,000–100,000" required disabled>
+                  </div>
+                </div>
+                <details class="advanced-options"><summary>Advanced settings<svg><use href="#i-plus"/></svg></summary><div class="advanced-grid"><div><label class="field-label" for="target-fps">Frame rate</label><select id="target-fps" name="target_fps"><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="30">30 FPS</option></select></div><div><label class="field-label" for="seed">Seed</label><input id="seed" name="seed" type="number" value="42" min="0" max="2147483647" step="1"></div></div></details>
                 <div id="upload-progress" class="upload-progress" hidden><div><span id="upload-label">Uploading video</span><strong id="upload-percent">0%</strong></div><progress id="upload-bar" max="100" value="0"></progress></div>
                 <button id="submit-job" type="submit" class="button primary run-button" disabled><svg><use href="#i-orbit"/></svg><span>Reconstruct in 4D</span><svg class="end-icon"><use href="#i-arrow"/></svg></button>
                 <p id="submit-help" class="submit-help">Upload a video to get started.</p>
@@ -91,7 +109,7 @@
           </section>
           <details id="logs-details" class="panel logs-panel"><summary><span><span class="terminal-mark">&gt;_</span>Run log</span><span id="log-state">Live process output</span></summary><pre id="job-log" tabindex="0" aria-label="Process log"></pre><button id="copy-logs" type="button" class="text-link copy-logs">Copy log</button></details>
         </div><div class="job-side-column">
-          <section class="panel progress-panel"><div class="panel-heading"><h2>Progress</h2><span id="overall-percent" class="mono">0%</span></div><div class="progress-content"><div class="progress-track"><span id="overall-progress"></span></div><p id="job-message" role="status" aria-live="polite"></p><ol id="stage-list" class="stage-list"><li data-stage="probe"><span class="stage-indicator">1</span><div><strong>Check source</strong><small>Read the selected segment</small></div></li><li data-stage="generate"><span class="stage-indicator">2</span><div><strong>Generate viewpoints</strong><small>See the person from every side</small></div></li><li data-stage="adapter"><span class="stage-indicator">3</span><div><strong>Prepare the character</strong><small>Separate foreground and build geometry</small></div></li><li data-stage="train"><span class="stage-indicator">4</span><div><strong>Reconstruct in 4D</strong><small>Optimize appearance and motion</small></div></li><li data-stage="export"><span class="stage-indicator">5</span><div><strong>Prepare playback</strong><small>Export the animated scene</small></div></li></ol></div><div class="job-facts"><div><span>Started</span><strong id="job-created">—</strong></div><div><span>Quality</span><strong id="job-quality">—</strong></div><div><span>Segment</span><strong id="job-segment">—</strong></div></div></section>
+          <section class="panel progress-panel"><div class="panel-heading"><h2>Progress</h2><span id="overall-percent" class="mono">0%</span></div><div class="progress-content"><div class="progress-track"><span id="overall-progress"></span></div><p id="job-message" role="status" aria-live="polite"></p><ol id="stage-list" class="stage-list"><li data-stage="probe"><span class="stage-indicator">1</span><div><strong>Check source</strong><small>Read the selected segment</small></div></li><li data-stage="generate"><span class="stage-indicator">2</span><div><strong>Generate viewpoints</strong><small>See the person from every side</small></div></li><li data-stage="adapter"><span class="stage-indicator">3</span><div><strong>Prepare the character</strong><small>Separate foreground and build geometry</small></div></li><li data-stage="train"><span class="stage-indicator">4</span><div><strong>Reconstruct in 4D</strong><small>Optimize appearance and motion</small></div></li><li data-stage="export"><span class="stage-indicator">5</span><div><strong>Prepare playback</strong><small>Export the animated scene</small></div></li></ol></div><div class="job-facts"><div><span>Started</span><strong id="job-created">—</strong></div><div><span>Views</span><strong id="job-views">—</strong></div><div><span>Segment</span><strong id="job-segment">—</strong></div></div></section>
           <section id="downloads-panel" class="panel downloads-panel" hidden><div class="panel-heading"><h2>Your files</h2></div><div id="downloads-list" class="downloads-list"></div><p class="downloads-note">The animated model includes the recorded performance. Use a compatible 4DGS viewer for playback.</p></section>
         </div></div>
       </section>

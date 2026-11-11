@@ -50,7 +50,7 @@ def system_state(settings: Settings, manager: JobManager) -> dict:
     disk = shutil.disk_usage(settings.data_dir)
     warnings = []
     if gpu and gpu["memory_total_mb"] < 75000:
-        warnings.append("The high-detail preset targets an 80 GB or larger GPU. It may exhaust memory on this GPU; use a smaller preset if necessary.")
+        warnings.append("Full-resolution reconstruction targets an 80 GB or larger GPU. Memory use varies by clip and Gaussian count.")
     if disk.free < 60 * 1024**3:
         warnings.append("Less than 60 GB is free. Public model downloads and reconstruction data require substantial disk space.")
     return {"gpu": gpu, "checks": checks, "readiness": all(item["ok"] for item in checks), "model_smplx_ready": smplx_ready, "models_ready": not missing_models, "missing_models": missing_models, "disk": {"free_bytes": disk.free, "total_bytes": disk.total}, "busy": manager.busy, "presets": PRESETS, "warnings": warnings, "data_dir": str(settings.data_dir), "frames": 121}
@@ -239,9 +239,9 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
         return {"jobs": manager.list()}
 
     @app.post("/api/jobs", status_code=201)
-    async def create_job(file: UploadFile = File(...), title: str = Form(""), preset: str = Form("quality"), start_time: float = Form(0), target_fps: int = Form(24), steps: int | None = Form(None), seed: int = Form(42)):
+    async def create_job(file: UploadFile = File(...), title: str = Form(""), preset: str = Form("quality"), start_time: float = Form(0), target_fps: int = Form(24), steps: int | None = Form(None), seed: int = Form(42), views: int | None = Form(None)):
         try:
-            options = JobOptions(preset=preset, start_time=start_time, target_fps=target_fps, steps=steps, seed=seed)
+            options = JobOptions(preset=preset, views=views, start_time=start_time, target_fps=target_fps, steps=steps, seed=seed)
         except ValidationError as exc:
             raise HTTPException(422, str(exc)) from exc
         state = system_state(settings, manager)

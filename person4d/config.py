@@ -42,10 +42,17 @@ class Settings:
         return self.root / "vendor/freetimegs"
 
 
+VIEW_LAYOUTS = {
+    12: {"views_per_layer": 12, "layer_pitches": [15]},
+    24: {"views_per_layer": 24, "layer_pitches": [15]},
+    48: {"views_per_layer": 16, "layer_pitches": [-10, 15, 35]},
+}
+
+
 PRESETS = {
-    "preview": {"label": "Preview", "views_per_layer": 12, "layer_pitches": [15], "steps": 8000, "max_points": 250000, "data_factor": 2, "description": "12 views, 352 × 640 training, 250k initial Gaussians"},
-    "balanced": {"label": "Balanced", "views_per_layer": 24, "layer_pitches": [15], "steps": 30000, "max_points": 1000000, "data_factor": 1, "description": "24 views, 704 × 1280 training, 1M initial Gaussians"},
-    "quality": {"label": "High detail · 80 GB+ GPU", "views_per_layer": 16, "layer_pitches": [-10, 15, 35], "steps": 50000, "max_points": 2000000, "data_factor": 1, "description": "48 views, 704 × 1280 training, 2M initial Gaussians; targets 80 GB+ GPUs"},
+    "preview": {"label": "Preview", **VIEW_LAYOUTS[12], "steps": 8000, "max_points": 250000, "data_factor": 2, "description": "12 views, 352 × 640 training, 250k initial Gaussians"},
+    "balanced": {"label": "Balanced", **VIEW_LAYOUTS[24], "steps": 30000, "max_points": 1000000, "data_factor": 1, "description": "24 views, 704 × 1280 training, 1M initial Gaussians"},
+    "quality": {"label": "High detail · 80 GB+ GPU", **VIEW_LAYOUTS[48], "steps": 50000, "max_points": 2000000, "data_factor": 1, "voxel_size": 0.016, "description": "48 views, 704 × 1280 training, 1.6 cm seed grid, up to 2M Gaussians; targets 80 GB+ GPUs"},
 }
 
 MODEL_FILES = (

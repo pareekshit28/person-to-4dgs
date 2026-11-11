@@ -35,12 +35,12 @@ def _bf16_autocast():
 
 
 def _rgb_frames(video: Tensor) -> tuple[np.ndarray, ...]:
-    """Freeze the released CUDA scaling boundary before CPU publication."""
+    """Pack RGB bytes before moving the frames to the CPU encoder."""
+    import torch
 
-    scaled = video.detach().float().add_(1.0).mul_(127.5).clamp_(0.0, 255.0).to(device="cpu")
-    return tuple(
-        scaled[:, frame_index].permute(1, 2, 0).numpy().astype(np.uint8) for frame_index in range(scaled.shape[1])
-    )
+    scaled = video.detach().float().add_(1.0).mul_(127.5).clamp_(0.0, 255.0)
+    packed = scaled.permute(1, 2, 3, 0).to(dtype=torch.uint8, memory_format=torch.contiguous_format)
+    return tuple(packed.cpu().numpy())
 
 
 class VaeExecutor:
@@ -202,7 +202,8 @@ class VaeExecutor:
             )
         num_views = int(latents.shape[0])
         worker_count = self._worker_count(num_views, len(self.devices))
-        slots = BoundedSemaphore(worker_count)
+        # One extra view lets CUDA decode while the CPU encodes the prior view.
+        slots = BoundedSemaphore(worker_count + 1)
         sink_futures: list[Future[Output] | None] = [None] * num_views
         stopped = Event()
 
@@ -224,6 +225,9 @@ class VaeExecutor:
                         if worker_stop.is_set():
                             return
                         slots.acquire()
+                        if worker_stop.is_set():
+                            slots.release()
+                            return
                         try:
                             decoded = self._decode_view(model, latents[index], device)
                             device_video = decoded[0].detach()

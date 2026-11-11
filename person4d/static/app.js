@@ -5,7 +5,11 @@
   const stages = ["probe", "generate", "adapter", "train", "export"];
   const stageNames = { queued: "Queued", probe: "Checking source", generate: "Generating viewpoints", adapter: "Preparing character", train: "Reconstructing in 4D", export: "Preparing playback", completed: "Ready to explore" };
   const statusNames = { queued: "Queued", running: "In progress", completed: "Complete", failed: "Needs attention", cancelled: "Stopped", interrupted: "Interrupted" };
-  const presetNames = { preview: "Preview", balanced: "Balanced", quality: "High quality" };
+  const legacyPresets = {
+    preview: { views: 12, steps: 8000 },
+    balanced: { views: 24, steps: 30000 },
+    quality: { views: 48, steps: 50000 },
+  };
   const state = { authenticated: false, tokenRequired: false, system: null, jobs: [], selected: null, selectedId: null, selectedTab: "result", file: null, objectURL: null, duration: 0, metadataUnknown: false, uploading: false, setupUploading: false, setup: null, connected: true, pollTimer: null, polling: false, logOffset: 0, logJob: null, logText: "", viewerKey: "", viewsKey: "", toastTimer: null, previewing: false, initialSelection: true };
 
   class APIError extends Error {
@@ -323,11 +327,20 @@
     const job = state.selected;
     if (!job) return;
     const title = job.title || job.input?.filename || "Untitled reconstruction";
+    const options = job.options || {};
+    const recipe = job.recipe;
+    const defaults = legacyPresets[options.preset || "quality"];
+    const views = recipe?.views_per_layer && recipe.layer_pitches?.length
+      ? recipe.views_per_layer * recipe.layer_pitches.length : (options.views ?? defaults?.views);
+    const steps = options.steps ?? recipe?.steps ?? defaults?.steps;
+    const fps = Number(options.target_fps) || 24;
+    const viewLabel = views ? `${views} views` : "";
+    const stepsLabel = steps ? `${steps.toLocaleString()} steps` : "";
     $("job-title-heading").textContent = title;
     $("breadcrumb-name").textContent = title;
     $("job-status").textContent = statusNames[job.status] || job.status;
     $("job-status").className = `badge ${job.status}`;
-    $("job-description").textContent = `${presetNames[job.options?.preset] || "Reconstruction"} · 121 frames · ${job.options?.target_fps || 24} FPS`;
+    $("job-description").textContent = [viewLabel, stepsLabel, "121 frames", `${fps} FPS`].filter(Boolean).join(" · ");
     $("cancel-job").hidden = !["queued", "running"].includes(job.status);
     $("retry-job").hidden = !["failed", "cancelled", "interrupted"].includes(job.status);
     $("retry-job").querySelector("span").textContent = job.status === "failed" ? "Retry reconstruction" : "Resume reconstruction";
@@ -339,9 +352,8 @@
     $("overall-progress").classList.toggle("indeterminate", job.status === "running" && !progress);
     $("job-message").textContent = job.message || (job.status === "queued" ? "Waiting for the GPU. Your source is saved." : stageNames[job.stage] || "");
     $("job-created").textContent = dateLabel(job.created_at);
-    $("job-quality").textContent = presetNames[job.options?.preset] || "—";
-    const fps = Number(job.options?.target_fps) || 24;
-    const start = Number(job.options?.start_time) || 0;
+    $("job-views").textContent = viewLabel || "—";
+    const start = Number(options.start_time) || 0;
     $("job-segment").textContent = `${seconds(start)} → ${seconds(start + 121 / fps)}`;
     $("viewer-timing").textContent = `121 FRAMES · ${fps} FPS`;
     renderStages(job);
@@ -540,19 +552,21 @@
     if (!state.system?.readiness) { openSetup(); return; }
     const fps = Number($("target-fps").value);
     const start = Number($("start-time").value);
-    const stepValue = $("steps").value.trim();
+    const stepsSelect = $("training-steps");
+    const stepsInput = stepsSelect.value === "custom" ? $("custom-steps") : stepsSelect;
+    const steps = Number(stepsInput.value);
     const seed = Number($("seed").value);
     if (!Number.isFinite(start) || start < 0 || start > 86400 || (!state.metadataUnknown && start + 121 / fps > state.duration + 0.01)) { toast("Choose a segment that fits inside the source video.", true); return; }
-    if (stepValue && (!Number.isInteger(Number(stepValue)) || Number(stepValue) < 1000 || Number(stepValue) > 100000)) { toast("Training steps must be a whole number between 1,000 and 100,000.", true); $("steps").focus(); return; }
+    if (!Number.isInteger(steps) || steps < 1000 || steps > 100000) { toast("Training steps must be a whole number between 1,000 and 100,000.", true); stepsInput.focus(); return; }
     if (!Number.isInteger(seed) || seed < 0 || seed > 2147483647) { toast("Enter a seed between 0 and 2,147,483,647.", true); $("seed").focus(); return; }
     const form = new FormData();
     form.append("file", state.file, state.file.name);
     form.append("title", $("job-title").value.trim());
-    form.append("preset", document.querySelector('input[name="preset"]:checked').value);
+    form.append("views", $("view-count").value);
     form.append("start_time", String(start));
     form.append("target_fps", String(fps));
     form.append("seed", String(seed));
-    if (stepValue) form.append("steps", stepValue);
+    form.append("steps", String(steps));
     state.uploading = true;
     $("upload-progress").hidden = false;
     $("upload-bar").value = 0;
@@ -651,6 +665,13 @@
   $("start-range").addEventListener("input", (event) => setStart(event.target.value, true));
   $("start-time").addEventListener("change", (event) => setStart(event.target.value, true));
   $("target-fps").addEventListener("change", updateSegment);
+  function updateCustomSteps() {
+    const custom = $("training-steps").value === "custom";
+    $("custom-steps-field").hidden = !custom;
+    $("custom-steps").disabled = !custom;
+  }
+  $("training-steps").addEventListener("change", updateCustomSteps);
+  updateCustomSteps();
   $("preview-segment").addEventListener("click", async () => {
     $("source-preview").currentTime = Number($("start-time").value) || 0;
     state.previewing = true;

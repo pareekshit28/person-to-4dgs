@@ -101,3 +101,20 @@ def test_upload_limit_and_path_safe_input(app_setup, monkeypatch):
         large = client.post("/api/jobs", files={"file": ("person.mp4", b"x" * 129, "video/mp4")})
         assert large.status_code == 413
         assert len(list(settings.jobs_dir.glob("*/job.json"))) == 1
+
+
+def test_views_and_steps_are_independent(app_setup, monkeypatch):
+    _, _, app = app_setup
+    monkeypatch.setattr("person4d.api.system_state", lambda *_: {"readiness": True})
+    with TestClient(app, headers={"Authorization": "Bearer test-secret"}) as client:
+        video = {"file": ("person.mp4", b"video", "video/mp4")}
+        response = client.post("/api/jobs", files=video, data={"views": "12", "steps": "50000"})
+        assert response.status_code == 201
+        job = client.get(f"/api/jobs/{response.json()['id']}").json()
+        assert job["options"]["views"] == 12
+        assert job["options"]["steps"] == 50000
+        assert job["recipe"]["views_per_layer"] == 12
+        assert job["recipe"]["layer_pitches"] == [15]
+        assert job["recipe"]["data_factor"] == 1
+        assert job["recipe"]["max_points"] == 2_000_000
+        assert client.post("/api/jobs", files=video, data={"views": "13", "steps": "50000"}).status_code == 422

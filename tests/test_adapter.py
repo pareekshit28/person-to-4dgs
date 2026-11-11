@@ -10,9 +10,10 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from person4d import adapter
 
@@ -43,6 +44,16 @@ def qvec_to_rotation(q):
 
 
 class GeometryContractTests(unittest.TestCase):
+    def test_carving_mask_matches_max_filter_at_edges(self):
+        alpha = np.zeros((15, 11), dtype=np.uint8)
+        alpha[0, 10] = alpha[7, 5] = 128
+        alpha[14, 0] = 255
+        alpha[1, 1] = 127
+        for source in (alpha, alpha[:2, :2], alpha[:1, -1:]):
+            binary = Image.fromarray((source >= 128).astype(np.uint8) * 255)
+            expected = np.asarray(binary.filter(ImageFilter.MaxFilter(5))) > 0
+            np.testing.assert_array_equal(adapter._carving_mask(source), expected)
+
     def test_colmap_pose_and_projection_preserve_opencv_axes(self):
         rig = cameras()
         adapter.validate_cameras({"camera_model": "OPENCV", "cameras": rig})
@@ -261,6 +272,18 @@ class ConversionTests(unittest.TestCase):
                 keyframe_step=12, predictor_factory=lambda: counting,
                 decoder=self.decoder, carver=self.carver)
             self.assertEqual(len(processed), 3 * 121 - 8)
+
+    def test_png_write_error_prevents_dataset_publication(self):
+        with tempfile.TemporaryDirectory() as folder, redirect_stdout(io.StringIO()):
+            root = Path(folder)
+            source = self.source(root)
+            destination = root / "dataset"
+            with patch.object(adapter, "_save_rgba", side_effect=OSError("simulated write error")):
+                with self.assertRaisesRegex(OSError, "write error"):
+                    adapter.convert(source, destination, root / "models", max_points=400,
+                        keyframe_step=12, predictor_factory=lambda: self.predictor,
+                        decoder=self.decoder, carver=self.carver)
+            self.assertFalse(destination.exists())
 
     def test_short_generated_video_never_publishes(self):
         with tempfile.TemporaryDirectory() as folder, redirect_stdout(io.StringIO()):

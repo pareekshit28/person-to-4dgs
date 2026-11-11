@@ -74,6 +74,25 @@ def make_runner(cfg=None, n=8):
 
 
 class InitializationTests(unittest.TestCase):
+    def test_world_scale_is_normalized_without_cross_frame_knn(self):
+        cfg = trainer.Config(start_frame=0, end_frame=11, init_scale_world=0.0125)
+        initial = dict(
+            positions=torch.zeros(4, 3), velocities=torch.zeros(4, 3),
+            colors=torch.ones(4, 3), times=torch.arange(4).reshape(-1, 1) / 3,
+            durations=torch.full((4, 1), 0.1),
+        )
+        transform = np.eye(4)
+        transform[:3, :3] *= 0.5
+        transform[:3, 3] = [10, 20, 30]
+        with patch.object(trainer, "knn", side_effect=AssertionError("KNN should not run")):
+            splats, _ = trainer.create_splats_with_optimizers_4d(
+                cfg, initial, device="cpu", world_transform=transform,
+            )
+        torch.testing.assert_close(splats["scales"].exp(), torch.full((4, 3), 0.00625))
+        cfg.init_scale_world = float("nan")
+        with self.assertRaisesRegex(ValueError, "positive and finite"):
+            trainer.create_splats_with_optimizers_4d(cfg, initial, device="cpu")
+
     def test_subrange_preserves_physical_time_duration_and_displacement(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "init.npz"
