@@ -32,6 +32,20 @@ function createSortWorker() {
   return createModuleWorker(new URL("./sort-worker.js", import.meta.url));
 }
 
+function sameOriginAudioURL(input) {
+  if (!input) return null;
+  try {
+    const url = new URL(input, document.baseURI);
+    if (
+      ["http:", "https:"].includes(url.protocol) &&
+      url.origin === location.origin && !url.username && !url.password
+    ) return url;
+  } catch {
+    // An invalid optional track must not prevent the model from playing.
+  }
+  return null;
+}
+
 /** A self-contained canvas player. No UI, global shortcuts, or document styles. */
 export class FTGSPlayer extends EventTarget {
   #canvas;
@@ -261,7 +275,7 @@ export class FTGSPlayer extends EventTarget {
   /** Load a File/Blob or HTTP(S) URL. Superseded loads reject with AbortError. */
   async load(
     input,
-    { name, view = null, autoplay = this.#options.autoplay, signal } = {},
+    { name, view = null, autoplay = this.#options.autoplay, signal, audio } = {},
   ) {
     this.#assertAlive();
     signal?.throwIfAborted();
@@ -316,8 +330,9 @@ export class FTGSPlayer extends EventTarget {
       controller.signal.throwIfAborted();
       if (generation !== this.#generation) throw aborted();
       const playback = resolvePlayback(data, this.#options);
-      if (data.audio) {
-        const track = new AudioTrack(data.audio.blob, () => {
+      const audioSource = data.audio?.blob ?? sameOriginAudioURL(audio);
+      if (audioSource) {
+        const track = new AudioTrack(audioSource, () => {
           if (this.#audio === track) this.#emit("audiochange");
         });
         pendingAudio = track;

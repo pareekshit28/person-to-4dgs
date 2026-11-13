@@ -1,17 +1,50 @@
 import json
+import shutil
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
 from person4d.config import MODEL_FILES, PRESETS, SMPLX_FILE, VIEW_LAYOUTS, Settings
-from person4d.pipeline import Cancelled, Pipeline, run_command
+from person4d.pipeline import Cancelled, Pipeline, audio_export_command, probe_video, run_command, write_scene_bundle
 
 
 def job_info():
     return {"id": "job", "input": {"path": "input/source.mp4"}, "options": {"preset": "quality", "steps": 1000, "target_fps": 24, "start_time": 1.5, "seed": 42}}
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg tools are required")
+def test_audio_export_preserves_delay_within_selected_video_segment(tmp_path):
+    source = tmp_path / "source.mkv"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=size=32x32:rate=24:duration=6",
+        "-itsoffset", "4", "-f", "lavfi", "-i", "sine=sample_rate=48000:duration=2",
+        "-c:v", "ffv1", "-c:a", "pcm_s16le", str(source),
+    ], check=True)
+    metadata = probe_video(source)
+    assert metadata["has_audio"]
+    audio = tmp_path / "audio.m4a"
+    subprocess.run(audio_export_command(source, audio, metadata, 3, 2), check=True)
+    decoded = subprocess.check_output([
+        "ffmpeg", "-v", "error", "-i", str(audio), "-f", "s16le", "-",
+    ])
+    assert abs(len(decoded) / 2 - 96_000) <= 1024
+    assert not any(decoded[:80_000])
+    assert any(decoded[110_000:120_000])
+
+    model = tmp_path / "character.ftgs.ply"
+    model.write_bytes(b"ply\n" + b"x" * 150)
+    playback = tmp_path / "playback.json"
+    playback.write_text(json.dumps({"audio": audio.name}))
+    bundle = tmp_path / "character-with-audio.zip"
+    write_scene_bundle(bundle, (model, audio, playback), threading.Event())
+    with ZipFile(bundle) as archive:
+        assert archive.namelist() == [model.name, audio.name, playback.name]
+        assert archive.read(audio.name) == audio.read_bytes()
 
 
 @pytest.mark.parametrize("voxel_size", [None, 0.016], ids=["saved-legacy-recipe", "denser-quality-recipe"])

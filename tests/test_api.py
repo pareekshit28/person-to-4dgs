@@ -79,6 +79,22 @@ def test_artifact_range_and_traversal_restriction(app_setup):
         assert client.get("/api/jobs/abc/files/job.json").status_code == 404
         assert client.get("/api/jobs/abc/files/..%2F..%2Fsetup.json").status_code == 404
 
+        output = path.parent.parent / "output"
+        output.mkdir()
+        (output / "audio.m4a").write_bytes(b"audio")
+        (output / "character-with-audio.zip").write_bytes(b"bundle")
+        (output / "audio.partial.m4a").write_bytes(b"partial")
+        artifacts = client.get("/api/jobs/abc/artifacts").json()["artifacts"]
+        audio = next(item for item in artifacts if item["kind"] == "audio")
+        bundle = next(item for item in artifacts if item["kind"] == "bundle")
+        response = client.get(audio["url"], headers={"Range": "bytes=1-3"})
+        assert response.status_code == 206
+        assert response.headers["content-type"] == "audio/mp4"
+        assert response.content == b"udi"
+        assert client.get(bundle["url"]).content == b"bundle"
+        assert client.get("/api/jobs/abc/files/output/audio.partial.m4a").status_code == 404
+        assert client.get(audio["url"], headers={"Authorization": "Bearer wrong"}).status_code == 401
+
 
 def test_upload_is_blocked_until_setup_is_ready(app_setup):
     _, _, app = app_setup

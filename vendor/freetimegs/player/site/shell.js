@@ -21,10 +21,10 @@ export function mountPlayerShell(viewer) {
         <nav id="welcome-links" aria-label="Player resources"><a href="${new URL('../examples/embedding.html', import.meta.url).href}">Embedding</a><a href="https://github.com/OpsiClear-4DGS/ftgs-player">Source</a></nav>
       </div>
       <div class="welcome-choices">
-        <button id="empty" class="empty" aria-label="Choose a .ftgs.ply or .tsog file">
+        <button id="empty" class="empty" aria-label="Choose a scene file">
           <svg class="empty-icon" aria-hidden="true"><use href="#open" /></svg>
           <span class="empty-title">Open scene</span>
-          <span class="empty-caption">or drop a .tsog or .ftgs.ply file</span>
+          <span class="empty-caption">or drop a .tsog, .ftgs.ply or Person4D .zip file</span>
         </button>
         <a class="example-link" href="?example=jensen-2m" aria-label="Play Slop Example">
           <span class="example-preview"><img src="${new URL('./assets/example.png', import.meta.url).href}" alt="" /></span>
@@ -34,7 +34,7 @@ export function mountPlayerShell(viewer) {
       </div>
       <p class="welcome-footer">Local files stay in your browser.</p>
     </section>
-    <input id="file" type="file" accept=".ply,.tsog" hidden aria-label="Open splat file" />
+    <input id="file" type="file" accept=".ply,.tsog,.zip" hidden aria-label="Open splat file" />
     <div id="message" class="message" role="status" hidden><span id="message-text"></span><button id="retry-example" class="button" hidden>Retry</button></div>
     <div id="ar-hint" class="message ar-hint" role="status" hidden></div>
     <div id="drop-hint" class="drop-hint" hidden>

@@ -131,6 +131,9 @@ In the UI:
    reconstruction. You can close the browser while the server continues processing.
 5. Open the completed character in the embedded viewer and download
    `character.ftgs.ply` and `playback.json`.
+   When the source segment has audio, the viewer plays it in sync. Download
+   `character-with-audio.zip` and open it in the bundled FTGS Player to play the
+   scene with sound from a local file.
 
 Do not stop the pod until the job has finished or you have cancelled it and
 retained the persistent volume. The app does not create, stop or bill RunPod pods.

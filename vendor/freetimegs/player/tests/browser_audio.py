@@ -1,10 +1,13 @@
 """Synthetic packaged audio, playback defaults, UI and embedding integration."""
 import argparse
+from base64 import b64decode
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import re
 import subprocess
 import threading
+from urllib.parse import urlencode
 
 from playwright.sync_api import sync_playwright
 
@@ -24,6 +27,14 @@ def main():
       });
       process.stdout.write(new Uint8Array(await blob.arrayBuffer()));
     """], cwd=root)
+    scene, tone = [b64decode(value) for value in subprocess.check_output(
+        ["node", "--input-type=module", "-e", """
+          import { demoFile } from './site/demo.js';
+          import { toneFile } from './tests/audio-fixture.mjs';
+          for (const file of [demoFile(), toneFile(5)])
+            console.log(Buffer.from(await file.arrayBuffer()).toString('base64'));
+        """], cwd=root, text=True,
+    ).splitlines()]
     prefix = "/ftgs-player/"
 
     class Handler(SimpleHTTPRequestHandler):
@@ -36,6 +47,10 @@ def main():
             path = self.path[len(prefix):].split("?", 1)[0]
             if path == "audio-demo.tsog":
                 data, mime = bundle, "application/zip"
+            elif path == "scene.ftgs.ply":
+                data, mime = scene, "application/octet-stream"
+            elif path == "tone.wav":
+                data, mime = tone, "audio/wav"
             elif path == "host.html":
                 data = b'''<!doctype html><title>Audio test</title><link rel="icon" href="data:,">
                   <canvas id="scene" style="width:640px;height:360px"></canvas>
@@ -44,8 +59,19 @@ def main():
             else:
                 self.path = "/" + self.path[len(prefix):]
                 return super().do_GET()
-            self.send_response(200)
+            range_header = self.headers.get("Range", "")
+            match = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header) if path == "tone.wav" else None
+            if match:
+                first = int(match[1])
+                last = min(int(match[2]), len(data) - 1) if match[2] else len(data) - 1
+                self.send_response(206)
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", f"bytes {first}-{last}/{len(data)}")
+                data = data[first:last + 1]
+            else:
+                self.send_response(200)
             self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
 
@@ -80,8 +106,8 @@ def main():
             page.goto(url + "?src=audio-demo.tsog")
             # Evaluating JS through the automation protocol can grant transient
             # activation. Let the actual page attempt autoplay before inspecting it.
-            page.wait_for_timeout(600)
-            page.wait_for_function("document.querySelector('#mute-toggle').getAttribute('aria-label') === 'Enable audio'")
+            page.wait_for_timeout(1800)
+            page.wait_for_function("document.querySelector('#mute-toggle')?.getAttribute('aria-label') === 'Enable audio'")
             assert page.locator("#playback-rate").input_value() == "1.25"
             assert page.evaluate("audioElements[0].paused"), "Autoplay denial should be visible, not ignored"
             page.locator("#canvas").focus()
@@ -110,6 +136,28 @@ def main():
             for i, a in enumerate(boxes):
                 for b in boxes[i + 1:]:
                     assert min(a["right"], b["right"]) <= max(a["left"], b["left"]) + 1 or min(a["bottom"], b["bottom"]) <= max(a["top"], b["top"]) + 1, boxes
+
+            # Hosted FTGS output uses a same-origin soundtrack on the scene clock.
+            page.set_viewport_size({"width": 960, "height": 640})
+            sidecar = {"src": "scene.ftgs.ply", "audio": "tone.wav", "autoplay": 0, "frames": 121, "fps": 24}
+            page.goto(url + "?" + urlencode(sidecar))
+            page.wait_for_function("!document.querySelector('#timeline').disabled && audioElements[0]?.readyState >= 2")
+            assert page.evaluate("audioElements[0].paused")
+            page.locator("#play-toggle").click()
+            page.wait_for_function("!audioElements[0].paused && audioElements[0].currentTime > 0.05")
+            page.locator("#play-toggle").click()
+            assert page.evaluate("audioElements[0].paused")
+            page.locator("#timeline").evaluate("el => { el.value=0.5; el.dispatchEvent(new Event('input')); }")
+            page.wait_for_function("Math.abs(audioElements[0].currentTime - 2.5) < 0.01")
+            assert page.evaluate("audioURLs.size === 0")
+
+            # A missing track leaves the loaded scene usable. A cross-origin
+            # URL is ignored before it is assigned to the media element.
+            page.goto(url + "?" + urlencode({**sidecar, "audio": "missing.wav"}))
+            page.wait_for_function("!document.querySelector('#timeline').disabled && document.querySelector('#mute-toggle').getAttribute('aria-label') === 'Audio unavailable'")
+            page.goto(url + "?" + urlencode({**sidecar, "audio": "https://example.invalid/tone.wav"}))
+            page.wait_for_function("!document.querySelector('#timeline').disabled")
+            assert page.evaluate("audioElements.length === 0")
 
             # Canvas API: real media clock, rate, seek, final stop, replay, URL cleanup.
             page.goto(url + "host.html")

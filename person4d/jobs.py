@@ -25,6 +25,7 @@ STAGE_RANGES = {"queued": (0, 0), "probe": (0, 2), "generate": (2, 40), "adapter
 def artifacts_for(settings: Settings, job_id: str) -> list[dict]:
     root = settings.jobs_dir / job_id
     candidates = [(root / "output/character.ftgs.ply", "model"), (root / "output/playback.json", "metadata"), (root / "job.log", "log"), (root / "video.json", "metadata"), (root / "dataset/manifest.json", "metadata")]
+    candidates += [(root / "output/audio.m4a", "audio"), (root / "output/character-with-audio.zip", "bundle")]
     candidates += [(path, "video") for path in sorted((root / "generated/videos").glob("*.mp4"))]
     candidates += [(path, "video") for path in sorted((root / "results/videos").glob("*.mp4"))]
     candidates += [(path, "checkpoint") for path in sorted((root / "results/ckpts").glob("*.pt"))]

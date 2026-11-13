@@ -4,10 +4,12 @@ const crcTable = Uint32Array.from({ length: 256 }, (_, byte) => {
     byte = (byte >>> 1) ^ (byte & 1 ? 0xedb88320 : 0);
   return byte >>> 0;
 });
-export function crc32(bytes) {
-  let crc = 0xffffffff;
+function updateCRC(crc, bytes) {
   for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ crcTable[(crc ^ bytes[i]) & 255];
-  return (crc ^ 0xffffffff) >>> 0;
+  return crc;
+}
+export function crc32(bytes) {
+  return (updateCRC(0xffffffff, bytes) ^ 0xffffffff) >>> 0;
 }
 const fail = (message) => {
   throw new Error(`Invalid TSOG ZIP: ${message}`);
@@ -98,48 +100,67 @@ export async function openZip(blob, signal) {
   }
   if (cursor !== size) fail("unexpected central-directory data.");
 
+  async function locate(name, maxBytes) {
+    const entry = entries.get(name);
+    if (!entry) fail(`missing '${name}'.`);
+    if (entry.unpacked > maxBytes)
+      fail(`'${name}' exceeds the supported entry size.`);
+    const header = new DataView((await read(entry.local, 30)).buffer);
+    if (
+      header.getUint32(0, true) !== 0x04034b50 ||
+      header.getUint16(8, true) !== entry.method ||
+      header.getUint16(6, true) !== entry.flags
+    )
+      fail(`invalid local header for '${name}'.`);
+    const streamed = Boolean(entry.flags & 8);
+    if (
+      header.getUint32(14, true) !== (streamed ? 0 : entry.crc) ||
+      header.getUint32(18, true) !== (streamed ? 0 : entry.packed) ||
+      header.getUint32(22, true) !== (streamed ? 0 : entry.unpacked)
+    )
+      fail(`inconsistent local CRC or size for '${name}'.`);
+    const nameSize = header.getUint16(26, true);
+    const localName = new TextDecoder("utf-8", { fatal: true }).decode(
+      await read(entry.local + 30, nameSize),
+    );
+    if (localName !== name) fail(`mismatched local filename for '${name}'.`);
+    const dataOffset =
+      entry.local + 30 + nameSize + header.getUint16(28, true);
+    if (dataOffset + entry.packed > offset) fail(`truncated '${name}'.`);
+    if (streamed) {
+      const end = dataOffset + entry.packed;
+      const size = Math.min(16, offset - end);
+      if (size < 12) fail(`missing data descriptor for '${name}'.`);
+      const descriptor = new DataView((await read(end, size)).buffer);
+      const matches = (start) => size >= start + 12 &&
+        descriptor.getUint32(start, true) === entry.crc &&
+        descriptor.getUint32(start + 4, true) === entry.packed &&
+        descriptor.getUint32(start + 8, true) === entry.unpacked;
+      // The signature is optional; a signature-less CRC may equal it.
+      if (!matches(0) && !(descriptor.getUint32(0, true) === 0x08074b50 && matches(4)))
+        fail(`invalid data descriptor for '${name}'.`);
+    }
+    return { entry, dataOffset };
+  }
+
   return {
     names: Object.freeze([...entries.keys()]),
+    async storedBlob(name, maxBytes) {
+      const { entry, dataOffset } = await locate(name, maxBytes);
+      if (entry.method !== 0 || entry.packed !== entry.unpacked)
+        fail(`'${name}' must be stored without compression.`);
+      // Validate large model entries a chunk at a time. Return a Blob view so
+      // FTGS decoding can continue to read the model without a second copy.
+      let crc = 0xffffffff;
+      const end = dataOffset + entry.unpacked;
+      for (let offset = dataOffset; offset < end; offset += 1024 * 1024)
+        crc = updateCRC(crc, await read(offset, Math.min(1024 * 1024, end - offset)));
+      if (((crc ^ 0xffffffff) >>> 0) !== entry.crc)
+        fail(`checksum failed for '${name}'.`);
+      return blob.slice(dataOffset, end);
+    },
     async read(name, maxBytes = 512 * 1024 * 1024) {
-      const entry = entries.get(name);
-      if (!entry) fail(`missing '${name}'.`);
-      if (entry.unpacked > maxBytes)
-        fail(`'${name}' exceeds the supported entry size.`);
-      const header = new DataView((await read(entry.local, 30)).buffer);
-      if (
-        header.getUint32(0, true) !== 0x04034b50 ||
-        header.getUint16(8, true) !== entry.method ||
-        header.getUint16(6, true) !== entry.flags
-      )
-        fail(`invalid local header for '${name}'.`);
-      const streamed = Boolean(entry.flags & 8);
-      if (
-        header.getUint32(14, true) !== (streamed ? 0 : entry.crc) ||
-        header.getUint32(18, true) !== (streamed ? 0 : entry.packed) ||
-        header.getUint32(22, true) !== (streamed ? 0 : entry.unpacked)
-      )
-        fail(`inconsistent local CRC or size for '${name}'.`);
-      const nameSize = header.getUint16(26, true);
-      const localName = new TextDecoder("utf-8", { fatal: true }).decode(
-        await read(entry.local + 30, nameSize),
-      );
-      if (localName !== name) fail(`mismatched local filename for '${name}'.`);
-      const dataOffset =
-        entry.local + 30 + nameSize + header.getUint16(28, true);
-      if (dataOffset + entry.packed > offset) fail(`truncated '${name}'.`);
-      if (streamed) {
-        const end = dataOffset + entry.packed;
-        const size = Math.min(16, offset - end);
-        if (size < 12) fail(`missing data descriptor for '${name}'.`);
-        const descriptor = new DataView((await read(end, size)).buffer);
-        const matches = (start) => size >= start + 12 &&
-          descriptor.getUint32(start, true) === entry.crc &&
-          descriptor.getUint32(start + 4, true) === entry.packed &&
-          descriptor.getUint32(start + 8, true) === entry.unpacked;
-        // The signature is optional; a signature-less CRC may equal it.
-        if (!matches(0) && !(descriptor.getUint32(0, true) === 0x08074b50 && matches(4)))
-          fail(`invalid data descriptor for '${name}'.`);
-      }
+      const { entry, dataOffset } = await locate(name, maxBytes);
       let bytes;
       if (entry.method === 0) {
         if (entry.packed !== entry.unpacked)

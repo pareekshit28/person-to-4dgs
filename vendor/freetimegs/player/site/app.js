@@ -1,7 +1,7 @@
 import { FTGSPlayer } from "../src/player.js";
 import { attachPlayerBridge } from "./bridge.js";
 import { demoFile } from "./demo.js";
-import { mountPlayerShell } from "./shell.js?v=5";
+import { mountPlayerShell } from "./shell.js?v=6";
 import { readExample, downloadExample } from "./examples.js?v=3";
 
 mountPlayerShell(document.getElementById("viewer"));
@@ -619,10 +619,17 @@ try {
     options,
   );
 
+  window.addEventListener("message", (event) => {
+    if (window.parent !== window && event.source === window.parent &&
+        event.origin === location.origin && event.data?.type === "person4d-pause")
+      player.pause();
+  }, options);
+
   const url = query.get("src");
   if (url)
     void load(url, {
       view: query.has("view") ? JSON.parse(query.get("view")) : null,
+      audio: query.get("audio"),
     });
   else if (exampleId) void openExample(exampleId);
   else if (query.get("demo") === "1" || $("viewer").dataset.demo === "true")

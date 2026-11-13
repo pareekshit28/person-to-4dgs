@@ -131,6 +131,7 @@ view, for example with `URLSearchParams` as above.
 | Parameter | Value / default |
 | --- | --- |
 | `src` | HTTP(S) URL or relative path to a `.ftgs.ply` or `.tsog`. |
+| `audio` | Optional same-origin HTTP(S) URL or relative path to an audio track for the scene loaded via `src`. |
 | `example=jensen-2m` | Load Slop Example with 2M Gaussians, audio and its camera; full points unless overridden. |
 | `demo=1` | Load the generated ribbon when `src` is absent. |
 | `autoplay=0` | Start paused; otherwise start after loading. Audible autoplay may need a click. |

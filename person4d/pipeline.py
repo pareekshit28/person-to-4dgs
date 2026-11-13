@@ -13,6 +13,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable
+from zipfile import ZIP_STORED, ZipFile
 
 from .config import MODEL_FILES, PRESETS, SMPLX_FILE, Settings
 
@@ -30,17 +31,66 @@ def atomic_json(path: Path, value: dict) -> None:
 
 def probe_video(path: Path) -> dict:
     try:
-        completed = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,avg_frame_rate,nb_frames,duration:format=duration", "-of", "json", str(path)], capture_output=True, text=True, timeout=30, check=True)
+        completed = subprocess.run([
+            "ffprobe", "-v", "error", "-show_entries",
+            "stream=codec_type,width,height,avg_frame_rate,nb_frames,duration,start_time:format=duration,start_time",
+            "-of", "json", str(path),
+        ], capture_output=True, text=True, timeout=30, check=True)
         data = json.loads(completed.stdout)
-        stream = data.get("streams", [])[0]
-        duration = float(data.get("format", {}).get("duration") or stream.get("duration") or 0)
+        streams = data.get("streams", [])
+        stream = next(item for item in streams if item["codec_type"] == "video")
+        container = data.get("format", {})
+        duration = float(container.get("duration") or stream.get("duration") or 0)
         if duration <= 0 or not stream.get("width") or not stream.get("height"):
             raise ValueError("Video has no valid duration or raster")
-        return {"duration": duration, "width": int(stream["width"]), "height": int(stream["height"]), "fps": stream.get("avg_frame_rate", "unknown"), "frames": stream.get("nb_frames")}
+        container_start = container.get("start_time", "N/A")
+        container_start = float(container_start) if container_start != "N/A" else 0.0
+        video_start = stream.get("start_time", "N/A")
+        video_start = float(video_start) if video_start != "N/A" else container_start
+        return {
+            "duration": duration, "width": int(stream["width"]), "height": int(stream["height"]),
+            "fps": stream.get("avg_frame_rate", "unknown"), "frames": stream.get("nb_frames"),
+            "video_start": video_start, "container_start": container_start,
+            "has_audio": any(item["codec_type"] == "audio" for item in streams),
+        }
     except FileNotFoundError as exc:
         raise RuntimeError("ffprobe is missing. Run scripts/setup_runpod.sh first.") from exc
-    except (subprocess.SubprocessError, ValueError, IndexError, KeyError) as exc:
+    except (subprocess.SubprocessError, ValueError, StopIteration, KeyError) as exc:
         raise ValueError("Cannot read this video. Upload a valid MP4, MOV, MKV or WebM file.") from exc
+
+
+def audio_export_command(source: Path, destination: Path, metadata: dict, start: float, duration: float) -> list[str]:
+    # Inference selects times relative to the first video frame. Preserve source
+    # timestamps to keep an audio track that starts earlier or later in sync.
+    clip_start = metadata["video_start"] + start
+    seek = max(0, clip_start - metadata["container_start"] - 1)
+    return [
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", f"{seek:.9f}", "-copyts", "-i", str(source), "-map", "0:a:0",
+        "-af", f"atrim=start={clip_start:.9f}:end={clip_start + duration:.9f},"
+               f"asetpts=PTS-({clip_start:.9f})/TB,aresample=async=1:first_pts=0",
+        "-t", f"{duration:.9f}", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+        str(destination),
+    ]
+
+
+def write_scene_bundle(destination: Path, files: tuple[Path, ...], cancel: threading.Event) -> None:
+    temporary = destination.with_suffix(".partial.zip")
+    try:
+        # Store the entries as-is so writing and opening the bundle require no
+        # compression of the potentially large, full-quality model.
+        with ZipFile(temporary, "w", ZIP_STORED) as archive:
+            for path in files:
+                with path.open("rb") as source, archive.open(path.name, "w") as entry:
+                    while block := source.read(1024 * 1024):
+                        if cancel.is_set():
+                            raise Cancelled("Cancelled while packaging the animated scene")
+                        entry.write(block)
+        if cancel.is_set():
+            raise Cancelled("Cancelled while packaging the animated scene")
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def terminate_process(process: subprocess.Popen) -> None:
@@ -370,7 +420,37 @@ class Pipeline:
             if not temporary_model.is_file() or temporary_model.stat().st_size < 100:
                 raise RuntimeError("Animated model export did not produce a valid file.")
             temporary_model.replace(model)
-        atomic_json(output / "playback.json", {"fps": options["target_fps"], "frames": 121, "duration_seconds": 121 / options["target_fps"], "format": "FreeTimeGsVanilla FTGS PLY v1", "model": "character.ftgs.ply", "source_start_time": options["start_time"], "preset": options["preset"], "views": preset["views_per_layer"] * len(preset["layer_pitches"]), "training_steps": steps, "diagnostics": "Training-view diagnostics (no held-out cameras)", "checkpoint": str(latest.relative_to(root)).replace("\\", "/")})
+        playback = {"fps": options["target_fps"], "frames": 121, "duration_seconds": needed, "format": "FreeTimeGsVanilla FTGS PLY v1", "model": "character.ftgs.ply", "source_start_time": options["start_time"], "preset": options["preset"], "views": preset["views_per_layer"] * len(preset["layer_pitches"]), "training_steps": steps, "diagnostics": "Training-view diagnostics (no held-out cameras)", "checkpoint": str(latest.relative_to(root)).replace("\\", "/")}
+        audio = output / "audio.m4a"
+        if metadata.get("has_audio") and not audio.is_file():
+            stage("export", "Adding audio from the selected source segment")
+            temporary_audio = output / "audio.partial.m4a"
+            try:
+                # The continuous FTGS clock ends at frame 120.
+                duration = 120 / options["target_fps"]
+                execute(audio_export_command(root / job["input"]["path"], temporary_audio, metadata,
+                                             options["start_time"], duration), cfg.root)
+                audio_probe = subprocess.run([
+                    "ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+                    "stream=codec_type", "-of", "csv=p=0", str(temporary_audio),
+                ], capture_output=True, text=True, check=True, timeout=15)
+                if audio_probe.stdout.strip() == "audio":
+                    temporary_audio.replace(audio)
+            except Cancelled:
+                raise
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                with log.open("a", encoding="utf-8") as handle:
+                    handle.write(f"\n[audio] Source audio could not be exported: {exc}\n")
+            finally:
+                temporary_audio.unlink(missing_ok=True)
+        if audio.is_file():
+            playback["audio"] = audio.name
+        playback_file = output / "playback.json"
+        atomic_json(playback_file, playback)
+        bundle = output / "character-with-audio.zip"
+        if audio.is_file() and not bundle.is_file():
+            stage("export", "Packaging the animated scene and audio")
+            write_scene_bundle(bundle, (model, audio, playback_file), cancel)
         complete("export")
         update({"stage": "completed", "stage_progress": 100, "message": "Your animated character is ready to view and download."})
 

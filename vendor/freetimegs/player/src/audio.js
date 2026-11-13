@@ -1,7 +1,7 @@
-/** One embedded audio track, following the player's scene clock. */
+/** One audio track following the player's scene clock. */
 export class AudioTrack {
   #element;
-  #url;
+  #objectURL;
   #events = new AbortController();
   #notify;
   #status = "ready";
@@ -10,7 +10,7 @@ export class AudioTrack {
   #request = 0;
   #time = 0;
 
-  constructor(blob, onChange) {
+  constructor(source, onChange) {
     this.#notify = onChange;
     this.#element = new Audio();
     const audio = this.#element;
@@ -35,12 +35,18 @@ export class AudioTrack {
       "error",
       () => {
         this.#error =
-          "The embedded audio could not be decoded by this browser.";
+          "The audio track could not be loaded or decoded by this browser.";
         this.#change("error");
       },
       options,
     );
-    audio.src = this.#url = URL.createObjectURL(blob);
+    if (source instanceof Blob) {
+      this.#objectURL = URL.createObjectURL(source);
+      audio.src = this.#objectURL;
+    } else {
+      audio.crossOrigin = "anonymous";
+      audio.src = source.href;
+    }
   }
 
   get state() {
@@ -104,7 +110,7 @@ export class AudioTrack {
         if (error.name === "NotAllowedError") this.#change("blocked");
         else if (error.name !== "AbortError") {
           this.#error =
-            "The embedded audio could not be played by this browser.";
+            "The audio track could not be played by this browser.";
           this.#change("error");
         }
       });
@@ -124,6 +130,6 @@ export class AudioTrack {
     this.pause();
     this.#element.removeAttribute("src");
     this.#element.load();
-    URL.revokeObjectURL(this.#url);
+    if (this.#objectURL) URL.revokeObjectURL(this.#objectURL);
   }
 }

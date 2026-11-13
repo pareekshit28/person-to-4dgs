@@ -240,6 +240,9 @@
     }
     if (tab !== "source") $("job-source-preview").pause();
     if (tab !== "views") $("generated-view-preview").pause();
+    if (tab !== "result") {
+      $("result-viewer").contentWindow?.postMessage({ type: "person4d-pause" }, location.origin);
+    }
   }
 
   function jobProgress(job) {
@@ -269,9 +272,11 @@
     if (modelURL) {
       const fps = Number(job.options?.target_fps) || 24;
       const query = new URLSearchParams({ src: new URL(modelURL, location.origin).href, fps: String(fps), frames: "121", autoplay: "0", points: "all" });
+      const audio = artifacts.find((artifact) => artifact.path === "output/audio.m4a");
+      if (audio) query.set("audio", new URL(audio.url, location.origin).href);
       if (job.playback?.view) query.set("view", JSON.stringify(job.playback.view));
       const viewerURL = `/player/index.html?${query}`;
-      const key = `${job.id}:${modelURL}`;
+      const key = `${job.id}:${viewerURL}`;
       if (state.viewerKey !== key) {
         $("result-viewer").src = viewerURL;
         state.viewerKey = key;
@@ -309,14 +314,16 @@
     downloadList.replaceChildren();
     const downloads = artifacts.filter((artifact) => (artifact.kind || artifact.type) !== "image");
     $("downloads-panel").hidden = downloads.length === 0;
-    const ordered = [...downloads].sort((a, b) => ((a.kind || a.type) === "model" ? -1 : 0) - ((b.kind || b.type) === "model" ? -1 : 0));
-    for (const artifact of ordered) {
+    const priority = { bundle: 0, model: 1 };
+    const labels = { bundle: "Animated 4DGS bundle", model: "Animated 4DGS model", audio: "Synchronized audio", checkpoint: "Training checkpoint" };
+    downloads.sort((a, b) => (priority[a.kind || a.type] ?? 2) - (priority[b.kind || b.type] ?? 2));
+    for (const artifact of downloads) {
       const link = node("a", "download-item");
       link.href = safeURL(artifact.url);
       link.setAttribute("download", artifact.name || "");
       const copy = node("span", "download-copy");
       const kind = artifact.kind || artifact.type || "file";
-      const label = kind === "model" ? "Animated 4DGS model" : kind === "checkpoint" ? "Training checkpoint" : artifact.name || "Download file";
+      const label = labels[kind] || artifact.name || "Download file";
       copy.append(node("strong", "", label), node("small", "", `${artifact.name || kind}${artifact.size !== undefined ? ` · ${bytes(artifact.size)}` : ""}`));
       link.append(icon(kind === "model" ? "orbit" : kind === "video" ? "video" : "file"), copy, icon("download", "end-icon"));
       downloadList.append(link);

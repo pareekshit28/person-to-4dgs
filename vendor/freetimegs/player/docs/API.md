@@ -94,6 +94,8 @@ Constructor options:
 
 `load()` options are `name`, `view`, and `autoplay` (override the constructor
 default for that load). The canvas API also accepts an `AbortSignal` as `signal`.
+Pass `audio` as a same-origin HTTP(S) URL to synchronize a separate track with
+the scene. Audio already packaged with the scene takes precedence.
 Starting another load or destroying the player cancels a pending load, which
 rejects with `AbortError`. Catch load rejections in your application. Invalid
 files leave the previously loaded model available, paused; a subsequent load

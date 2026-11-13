@@ -315,7 +315,8 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
         allowed = {item["path"] for item in job["artifacts"]} | {job["input"]["path"]}
         if not path.is_relative_to(root) or relative not in allowed or not path.is_file():
             raise HTTPException(404, "Artifact not found")
-        return FileResponse(path, filename=path.name, content_disposition_type="inline")
+        media_type = "audio/mp4" if relative == "output/audio.m4a" else None
+        return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 
     player = settings.training_repo / "player"
     if player.is_dir():
