@@ -155,7 +155,7 @@ copy completed views and prepared geometry from a matching job on the same
 data volume. Training uses the step count selected for the new job.
 
 Every new job uses the same quality and speed optimizations, including a
-704 × 1280 training raster, a 1.6 cm seed grid, and a cap of 2,000,000 Gaussians.
+704 × 1280 training raster, a 1.6 cm seed grid, and a cap of 250,000 Gaussians.
 The trainer starts each Gaussian with a standard deviation of 0.8 cm.
 The foreground masks and geometry determine the seed count. More seeds can
 increase training time and memory use.
@@ -217,6 +217,11 @@ stages and checkpoints remain. After a crash or restart, interrupted jobs can
 be resumed from the UI. The adapter reuses valid frames and hulls; training
 resumes from its latest completed checkpoint. Recovered generation may rerun
 its interrupted stage. The browser is not the worker and can reconnect later.
+
+Open a finished or stopped run and choose **Delete run** to reclaim storage.
+Deletion permanently removes the upload, generated views, prepared dataset,
+checkpoints, logs, and exported files for that run. Shared model weights and
+other runs are kept.
 
 The access token protects API, inputs, outputs and the player. Use the RunPod
 HTTPS link. The server is a single-owner application; do not share the token

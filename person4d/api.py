@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -15,11 +16,15 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from starlette.types import Receive, Scope, Send
 
 from .config import MODEL_FILES, PRESETS, SMPLX_FILE, Settings
-from .jobs import JobManager, artifacts_for, utc_now
+from .jobs import JobManager, utc_now
 from .pipeline import Pipeline, atomic_json, run_command
 from .schemas import JobOptions, Login
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def gpu_info() -> dict | None:
@@ -273,17 +278,32 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
     def job_detail(job_id: str):
         return get_job(job_id)
 
+    @app.delete("/api/jobs/{job_id}", status_code=204)
+    def job_delete(job_id: str):
+        try:
+            manager.delete(job_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Run not found") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except OSError as exc:
+            LOGGER.exception("Could not delete run %s", job_id)
+            raise HTTPException(500, "Could not remove all files for this run. Try deleting it again.") from exc
+
     @app.post("/api/jobs/{job_id}/cancel")
     def job_cancel(job_id: str):
-        get_job(job_id)
-        return manager.cancel(job_id)
+        try:
+            return manager.cancel(job_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Job not found") from exc
 
     @app.post("/api/jobs/{job_id}/retry")
     @app.post("/api/jobs/{job_id}/resume")
     def job_retry(job_id: str):
-        get_job(job_id)
         try:
             return manager.retry(job_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Job not found") from exc
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
@@ -293,18 +313,18 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
         if offset < 0:
             raise HTTPException(422, "Offset must be nonnegative")
         path = settings.jobs_dir / job_id / "job.log"
-        if not path.is_file():
+        try:
+            with path.open("rb") as handle:
+                handle.seek(min(offset, os.fstat(handle.fileno()).st_size))
+                chunk = handle.read(256 * 1024)
+                next_offset = handle.tell()
+        except FileNotFoundError:
             return {"text": "", "next_offset": 0}
-        with path.open("rb") as handle:
-            handle.seek(min(offset, path.stat().st_size))
-            chunk = handle.read(256 * 1024)
-            next_offset = handle.tell()
         return {"text": chunk.decode("utf-8", errors="replace"), "next_offset": next_offset}
 
     @app.get("/api/jobs/{job_id}/artifacts")
     def artifact_list(job_id: str):
-        get_job(job_id)
-        return {"artifacts": artifacts_for(settings, job_id)}
+        return {"artifacts": get_job(job_id)["artifacts"]}
 
     @app.get("/api/jobs/{job_id}/files/{relative:path}")
     @app.head("/api/jobs/{job_id}/files/{relative:path}")
@@ -316,7 +336,16 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
         if not path.is_relative_to(root) or relative not in allowed or not path.is_file():
             raise HTTPException(404, "Artifact not found")
         media_type = "audio/mp4" if relative == "output/audio.m4a" else None
-        return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
+
+        class ArtifactResponse(FileResponse):
+            async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+                try:
+                    with manager.read_files(job_id):
+                        await super().__call__(scope, receive, send)
+                except KeyError:
+                    await JSONResponse({"detail": "Run not found"}, status_code=404)(scope, receive, send)
+
+        return ArtifactResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 
     player = settings.training_repo / "player"
     if player.is_dir():

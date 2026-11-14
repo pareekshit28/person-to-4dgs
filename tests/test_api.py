@@ -104,6 +104,42 @@ def test_upload_is_blocked_until_setup_is_ready(app_setup):
         assert "Complete setup first" in response.json()["detail"]
 
 
+def test_delete_run_removes_only_its_files_and_history(app_setup):
+    settings, manager, app = app_setup
+    job = manager.create("delete-me", title="Old run", filename="clip.mp4",
+                         relative_input="input/source.mp4", options={}, sha256="digest")
+    manager.cancel(job["id"])
+    root = settings.jobs_dir / job["id"]
+    for relative in ("input/source.mp4", "generated/videos/00.mp4", "dataset/images/cam00/000000.png",
+                     "results/ckpts/ckpt_999.pt", "output/character-with-audio.zip", "job.log"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"run data")
+    neighbor = settings.jobs_dir / "other"
+    neighbor.mkdir()
+    (neighbor / "keep").write_bytes(b"other run")
+    settings.models_dir.mkdir()
+    shared_model = settings.models_dir / "keep"
+    shared_model.write_bytes(b"shared model")
+    (root / "link-to-models").symlink_to(settings.models_dir, target_is_directory=True)
+
+    endpoint = f"/api/jobs/{job['id']}"
+    with TestClient(app) as client:
+        assert client.delete(endpoint).status_code == 401
+        assert client.post("/api/login", json={"token": "test-secret"}).status_code == 200
+        assert client.delete(endpoint, headers={"Origin": "https://other.example"}).status_code == 403
+        assert client.delete(endpoint, headers={"Origin": "http://testserver"}).status_code == 204
+        assert not root.exists()
+        assert client.get("/api/jobs").json() == {"jobs": []}
+        for url in (endpoint, f"{endpoint}/logs", f"{endpoint}/artifacts", job["input"]["url"]):
+            assert client.get(url).status_code == 404
+        assert client.delete(endpoint).status_code == 404
+        assert client.post(f"{endpoint}/retry").status_code == 404
+        assert client.post(f"{endpoint}/cancel").status_code == 404
+    assert (neighbor / "keep").read_bytes() == b"other run"
+    assert shared_model.read_bytes() == b"shared model"
+
+
 def test_upload_limit_and_path_safe_input(app_setup, monkeypatch):
     settings, _, app = app_setup
     monkeypatch.setattr("person4d.api.system_state", lambda *_: {"readiness": True})
@@ -132,7 +168,7 @@ def test_views_and_steps_are_independent(app_setup, monkeypatch):
         assert job["recipe"]["views_per_layer"] == 12
         assert job["recipe"]["layer_pitches"] == [15]
         assert job["recipe"]["data_factor"] == 1
-        assert job["recipe"]["max_points"] == 2_000_000
+        assert job["recipe"]["max_points"] == 250_000
         assert job["recipe"]["voxel_size"] == 0.016
         assert client.post("/api/jobs", files=video, data={"views": "13", "steps": "50000"}).status_code == 422
 
@@ -156,5 +192,5 @@ def test_new_jobs_using_legacy_presets_share_reconstruction_settings(app_setup, 
         assert recipe["views_per_layer"] * len(recipe["layer_pitches"]) == views
         assert recipe["steps"] == steps
         assert recipe["data_factor"] == 1
-        assert recipe["max_points"] == 2_000_000
+        assert recipe["max_points"] == 250_000
         assert recipe["voxel_size"] == 0.016

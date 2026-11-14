@@ -5,12 +5,16 @@
   const stages = ["probe", "generate", "adapter", "train", "export"];
   const stageNames = { queued: "Queued", probe: "Checking source", generate: "Generating viewpoints", adapter: "Preparing character", train: "Reconstructing in 4D", export: "Preparing playback", completed: "Ready to explore" };
   const statusNames = { queued: "Queued", running: "In progress", completed: "Complete", failed: "Needs attention", cancelled: "Stopped", interrupted: "Interrupted" };
+  const deletableStatuses = new Set(["completed", "failed", "cancelled", "interrupted"]);
   const legacyPresets = {
     preview: { views: 12, steps: 8000 },
     balanced: { views: 24, steps: 30000 },
     quality: { views: 48, steps: 50000 },
   };
   const state = { authenticated: false, tokenRequired: false, system: null, jobs: [], selected: null, selectedId: null, selectedTab: "result", file: null, objectURL: null, duration: 0, metadataUnknown: false, uploading: false, setupUploading: false, setup: null, connected: true, pollTimer: null, polling: false, logOffset: 0, logJob: null, logText: "", viewerKey: "", viewsKey: "", toastTimer: null, previewing: false, initialSelection: true };
+  let deleteTarget = null;
+  let deleting = false;
+  let historyRevision = 0;
 
   class APIError extends Error {
     constructor(message, status) { super(message); this.status = status; }
@@ -350,6 +354,7 @@
     $("job-description").textContent = [viewLabel, stepsLabel, "121 frames", `${fps} FPS`].filter(Boolean).join(" · ");
     $("cancel-job").hidden = !["queued", "running"].includes(job.status);
     $("retry-job").hidden = !["failed", "cancelled", "interrupted"].includes(job.status);
+    $("delete-job").hidden = !deletableStatuses.has(job.status);
     $("retry-job").querySelector("span").textContent = job.status === "failed" ? "Retry reconstruction" : "Resume reconstruction";
     $("job-error").hidden = !job.error;
     $("job-error").textContent = job.error || "";
@@ -413,7 +418,7 @@
       if (state.selectedId !== id) return;
       state.selected = job;
       renderJob();
-    } catch (error) { if (error.status !== 401) toast(error.message, true); }
+    } catch (error) { if (state.selectedId === id && error.status !== 401) toast(error.message, true); }
   }
 
   async function pollLogs() {
@@ -436,10 +441,11 @@
   async function refresh() {
     if (!state.authenticated || state.polling) return;
     state.polling = true;
+    const revision = historyRevision;
     try {
       const results = await Promise.allSettled([api("/api/system"), api("/api/jobs"), api("/api/setup/status")]);
       if (results[0].status === "fulfilled") { state.system = results[0].value; renderSystem(); }
-      if (results[1].status === "fulfilled") {
+      if (results[1].status === "fulfilled" && revision === historyRevision) {
         const jobsResult = results[1].value;
         state.jobs = Array.isArray(jobsResult) ? jobsResult : jobsResult.jobs || [];
         renderHistory();
@@ -465,7 +471,10 @@
           const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
           if (id === state.selectedId) { state.selected = job; renderJob(); }
         } catch (error) {
-          if (error.status === 404) { showComposer(); toast("This reconstruction is no longer available.", true); }
+          if (error.status === 404 && id === state.selectedId && id !== deleteTarget) {
+            showComposer();
+            toast("This reconstruction is no longer available.", true);
+          }
         }
       }
       await pollLogs();
@@ -608,6 +617,52 @@
     finally { button.disabled = false; }
   }
 
+  function confirmDelete() {
+    const job = state.selected;
+    const dialog = $("delete-dialog");
+    if (deleting || dialog.open || !job || !deletableStatuses.has(job.status)) return;
+    deleteTarget = job.id;
+    $("delete-run-name").textContent = job.title || job.input?.filename || "Untitled reconstruction";
+    $("delete-error").hidden = true;
+    dialog.showModal();
+  }
+
+  async function deleteRun(event) {
+    event.preventDefault();
+    const id = deleteTarget;
+    if (deleting || !id || !$("delete-dialog").open) return;
+    deleting = true;
+    $("delete-cancel").disabled = true;
+    $("delete-confirm").disabled = true;
+    $("delete-confirm").textContent = "Deleting…";
+    $("delete-error").hidden = true;
+    try {
+      await api(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE", timeout: 120000 }).catch((error) => {
+        if (error.status !== 404) throw error;
+      });
+      historyRevision++;
+      state.jobs = state.jobs.filter((job) => job.id !== id);
+      deleteTarget = null;
+      $("delete-dialog").close();
+      if (state.selectedId === id) {
+        showComposer();
+        $("new-job").focus();
+      } else {
+        renderHistory();
+      }
+      toast("Run deleted.");
+      await refresh();
+    } catch (error) {
+      $("delete-error").textContent = error.message;
+      $("delete-error").hidden = false;
+    } finally {
+      deleting = false;
+      $("delete-cancel").disabled = false;
+      $("delete-confirm").disabled = false;
+      $("delete-confirm").textContent = "Delete run";
+    }
+  }
+
   $("new-job").addEventListener("click", showComposer);
   $("open-setup").addEventListener("click", openSetup);
   $("callout-setup").addEventListener("click", openSetup);
@@ -702,6 +757,16 @@
   });
   $("cancel-job").addEventListener("click", () => jobAction("cancel", $("cancel-job")));
   $("retry-job").addEventListener("click", () => jobAction(state.selected?.status === "failed" ? "retry" : "resume", $("retry-job")));
+  $("delete-job").addEventListener("click", confirmDelete);
+  $("delete-form").addEventListener("submit", deleteRun);
+  $("delete-cancel").addEventListener("click", () => {
+    deleteTarget = null;
+    $("delete-dialog").close();
+  });
+  $("delete-dialog").addEventListener("cancel", (event) => {
+    if (deleting) event.preventDefault();
+    else deleteTarget = null;
+  });
   $("logs-details").addEventListener("toggle", () => { if ($("logs-details").open) pollLogs(); });
   $("copy-logs").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(state.logText || $("job-log").textContent); toast("Run log copied."); }

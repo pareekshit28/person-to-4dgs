@@ -51,7 +51,7 @@ VIEW_LAYOUTS = {
 
 # Every newly submitted job uses these reconstruction settings.
 RECONSTRUCTION_DEFAULTS = {
-    "max_points": 2_000_000,
+    "max_points": 250_000,
     "data_factor": 1,
     "voxel_size": 0.016,
 }

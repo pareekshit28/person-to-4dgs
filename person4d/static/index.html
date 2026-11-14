@@ -7,8 +7,8 @@
   <meta name="description" content="Turn a video of a person into an animated, free-viewpoint 4D Gaussian scene.">
   <title>Person to 4DGS</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/style.css">
-  <script src="/app.js?v=2" defer></script>
+  <link rel="stylesheet" href="/style.css?v=2">
+  <script src="/app.js?v=3" defer></script>
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -115,7 +115,7 @@
       </section>
 
       <section id="job-workspace" class="workspace job-workspace" aria-labelledby="job-title-heading" hidden>
-        <div class="job-page-heading"><div><div class="eyebrow">YOUR RECONSTRUCTION</div><h1 id="job-title-heading"></h1><div class="job-subheading"><span id="job-status" class="badge"></span><span id="job-description"></span></div></div><div class="job-actions"><button id="cancel-job" class="button secondary" hidden>Stop job</button><button id="retry-job" class="button secondary" hidden><svg><use href="#i-play"/></svg><span>Resume reconstruction</span></button></div></div>
+        <div class="job-page-heading"><div><div class="eyebrow">YOUR RECONSTRUCTION</div><h1 id="job-title-heading"></h1><div class="job-subheading"><span id="job-status" class="badge"></span><span id="job-description"></span></div></div><div class="job-actions"><button id="cancel-job" class="button secondary" hidden>Stop job</button><button id="retry-job" class="button secondary" hidden><svg><use href="#i-play"/></svg><span>Resume reconstruction</span></button><button id="delete-job" type="button" class="button danger" hidden>Delete run</button></div></div>
         <div id="job-error" class="job-error" role="alert" hidden></div>
         <div class="job-grid"><div class="job-main-column">
           <section class="panel output-panel"><div class="output-tabs" role="tablist" aria-label="Preview type"><button id="tab-result" type="button" role="tab" aria-selected="true" aria-controls="pane-result" class="output-tab active">4D scene</button><button id="tab-source" type="button" role="tab" aria-selected="false" aria-controls="pane-source" class="output-tab">Source video</button><button id="tab-views" type="button" role="tab" aria-selected="false" aria-controls="pane-views" class="output-tab" disabled>Generated views</button><a id="open-player" class="text-link viewer-open" href="#" target="_blank" rel="noopener" hidden>Open viewer<svg><use href="#i-external"/></svg></a></div>
@@ -133,6 +133,18 @@
       <footer class="page-footer"><span>PERSON TO 4DGS</span><span>Built for your GPU workspace <span class="footer-dot">·</span> Animated performance capture</span></footer>
     </main>
   </div>
+
+  <dialog id="delete-dialog" class="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+    <form id="delete-form">
+      <div class="dialog-heading"><h2 id="delete-title">Delete run?</h2></div>
+      <p class="dialog-intro" id="delete-description">Permanently delete <strong id="delete-run-name"></strong> and its uploaded video, generated files, checkpoints, and logs from this pod. This cannot be undone.</p>
+      <p id="delete-error" class="field-error" role="alert" hidden></p>
+      <div class="dialog-footer">
+        <button id="delete-cancel" type="button" class="button secondary" autofocus>Cancel</button>
+        <button id="delete-confirm" type="submit" class="button danger">Delete run</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="setup-dialog" class="setup-dialog" aria-labelledby="setup-title"><div class="dialog-heading"><div><div class="eyebrow">WORKSPACE SETUP</div><h2 id="setup-title">Ready your pod</h2></div><button id="close-setup" class="icon-button" aria-label="Close setup"><svg><use href="#i-close"/></svg></button></div><p class="dialog-intro">Prepare the GPU and models once. Jobs and model files stay on your pod's persistent storage.</p><div id="setup-checks" class="setup-checks"></div><div class="model-setup-card"><div class="setup-step-label"><span class="step-number">01</span><strong>Reconstruction models</strong><span id="public-models-status" class="badge">Checking</span></div><p>Download the public models for motion recovery and viewpoint generation.</p><button id="download-models" class="button secondary"><svg><use href="#i-download"/></svg>Download models</button></div><div class="model-setup-card"><div class="setup-step-label"><span class="step-number">02</span><strong>SMPL-X body model</strong><span id="smplx-status" class="badge">Checking</span></div><p>SMPL-X requires a separate account and license. Download the neutral model from the <a href="https://smpl-x.is.tue.mpg.de/" target="_blank" rel="noopener">official SMPL-X website<svg><use href="#i-external"/></svg></a>, then upload your licensed file here.</p><label for="smplx-file" class="button secondary file-upload-button"><svg><use href="#i-upload"/></svg><span id="smplx-upload-label">Upload model file</span></label><input id="smplx-file" type="file" accept=".npz,.zip" class="visually-hidden"><small class="field-help">SMPLX_NEUTRAL.npz or models_smplx_v1_1.zip</small></div><div id="setup-task" class="setup-task" hidden><div><span id="setup-task-state" class="badge"></span><strong id="setup-task-message"></strong></div><pre id="setup-task-log" tabindex="0" aria-label="Setup log"></pre></div><div class="dialog-footer"><span id="setup-summary">Checking your workspace…</span><button id="done-setup" class="button primary">Done<svg><use href="#i-arrow"/></svg></button></div></dialog>
 

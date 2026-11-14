@@ -88,3 +88,55 @@ def test_second_server_cannot_take_over_data_directory(tmp_path):
             second.start()
     finally:
         first.close()
+
+
+def test_delete_rejects_running_queued_and_open_downloads(tmp_path):
+    pipeline = ControlledPipeline()
+    manager = JobManager(Settings(root=tmp_path, data_dir=tmp_path / "data"), pipeline)
+    manager.start()
+    try:
+        make_job(manager, "active")
+        assert pipeline.started.wait(2)
+        make_job(manager, "queued")
+        for job_id in ("active", "queued"):
+            with pytest.raises(ValueError, match="Stop this run"):
+                manager.delete(job_id)
+        manager.cancel("queued")
+        with manager.read_files("queued"):
+            with pytest.raises(ValueError, match="downloads"):
+                manager.delete("queued")
+        manager.delete("queued")
+        assert [job["id"] for job in manager.list()] == ["active"]
+    finally:
+        pipeline.finish.set()
+        manager.close()
+
+
+def test_interrupted_delete_stays_out_of_history_and_reclaims_files_on_restart(tmp_path, monkeypatch):
+    settings = Settings(root=tmp_path, data_dir=tmp_path / "data")
+    manager = JobManager(settings, ControlledPipeline())
+    make_job(manager, "recover")
+    manager.cancel("recover")
+    root = settings.jobs_dir / "recover"
+    (root / "job.log").write_text("saved log")
+
+    def failed_purge(path):
+        (path / "job.log").unlink()
+        raise OSError("Storage temporarily unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("person4d.jobs.shutil.rmtree", failed_purge)
+        with pytest.raises(OSError, match="Storage temporarily unavailable"):
+            manager.delete("recover")
+    assert not root.exists()
+    assert manager.list() == []
+    deleted = settings.jobs_dir / ".deleted/recover"
+    assert (deleted / "job.json").is_file()
+
+    restarted = JobManager(settings, ControlledPipeline())
+    restarted.start()
+    try:
+        assert restarted.list() == []
+        assert not deleted.exists()
+    finally:
+        restarted.close()

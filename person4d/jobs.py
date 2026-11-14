@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import copy
 import json
-import mimetypes
+import logging
+import shutil
+import stat
 import threading
-import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -13,6 +15,10 @@ from filelock import FileLock, Timeout
 
 from .config import PRESETS, RECONSTRUCTION_DEFAULTS, VIEW_LAYOUTS, Settings
 from .pipeline import Cancelled, Pipeline, atomic_json
+
+
+LOGGER = logging.getLogger(__name__)
+DELETABLE_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 
 
 def utc_now() -> str:
@@ -31,9 +37,13 @@ def artifacts_for(settings: Settings, job_id: str) -> list[dict]:
     candidates += [(path, "checkpoint") for path in sorted((root / "results/ckpts").glob("*.pt"))]
     result = []
     for path, kind in candidates:
-        if path.is_file():
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(info.st_mode):
             relative = path.relative_to(root).as_posix()
-            result.append({"name": path.name, "path": relative, "url": f"/api/jobs/{job_id}/files/{quote(relative)}", "kind": kind, "type": kind, "size": path.stat().st_size})
+            result.append({"name": path.name, "path": relative, "url": f"/api/jobs/{job_id}/files/{quote(relative)}", "kind": kind, "type": kind, "size": info.st_size})
     return result
 
 
@@ -42,6 +52,9 @@ class JobManager:
         self.settings = settings
         self.pipeline = pipeline or Pipeline(settings)
         self._jobs: dict[str, dict] = {}
+        self._deleting: set[str] = set()
+        self._readers: dict[str, int] = {}
+        self._deleted_dir = settings.jobs_dir / ".deleted"
         self._lock = threading.RLock()
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -58,8 +71,18 @@ class JobManager:
             self._process_lock.acquire(timeout=0)
         except Timeout as exc:
             raise RuntimeError("Another Person4D server owns this data directory. Run one server worker per GPU.") from exc
+        if not self._deleted_dir.is_symlink() and self._deleted_dir.is_dir():
+            for path in self._deleted_dir.iterdir():
+                if path.is_symlink() or not path.is_dir():
+                    continue
+                try:
+                    shutil.rmtree(path)
+                except OSError:
+                    LOGGER.exception("Could not finish deleting run %s", path.name)
         with self._lock:
             for path in self.settings.jobs_dir.glob("*/job.json"):
+                if path.parent == self._deleted_dir or path.parent.is_symlink():
+                    continue
                 try:
                     job = json.loads(path.read_text(encoding="utf-8"))
                     if job["id"] != path.parent.name:
@@ -119,8 +142,64 @@ class JobManager:
 
     def list(self) -> list[dict]:
         with self._lock:
-            ids = sorted(self._jobs, key=lambda item: self._jobs[item]["created_at"], reverse=True)
-        return [self.get(job_id) for job_id in ids]
+            jobs = sorted(self._jobs.values(), key=lambda job: job["created_at"], reverse=True)
+            snapshot = copy.deepcopy(jobs)
+        for job in snapshot:
+            job["artifacts"] = artifacts_for(self.settings, job["id"])
+        return snapshot
+
+    def delete(self, job_id: str) -> None:
+        if not job_id or Path(job_id).name != job_id or job_id in {".", "..", self._deleted_dir.name}:
+            raise KeyError(job_id)
+        root = self.settings.jobs_dir / job_id
+        deleted = self._deleted_dir / job_id
+        with self._lock:
+            if job_id in self._deleting:
+                raise ValueError("This run is already being deleted.")
+            job = self._jobs.get(job_id)
+            if self._deleted_dir.is_symlink():
+                raise OSError("Deletion directory must be local to the jobs volume.")
+            if job is None and not deleted.is_dir():
+                raise KeyError(job_id)
+            if self._active == job_id or (job is not None and job["status"] not in DELETABLE_STATUSES):
+                raise ValueError("Stop this run and wait for it to finish stopping before deleting it.")
+            if self._readers.get(job_id):
+                raise ValueError("Wait for downloads from this run to finish before deleting it.")
+            if root.is_symlink() or deleted.is_symlink():
+                raise OSError("Run directories must be local to the jobs volume.")
+            if job is not None:
+                self._deleted_dir.mkdir(exist_ok=True)
+                # Move the complete tree out of history and the preparation
+                # cache before removing any files. A restart can finish a purge.
+                try:
+                    root.rename(deleted)
+                except FileNotFoundError:
+                    if root.exists():
+                        raise
+                del self._jobs[job_id]
+            self._deleting.add(job_id)
+        try:
+            shutil.rmtree(deleted)
+        except FileNotFoundError:
+            if deleted.exists():
+                raise
+        finally:
+            with self._lock:
+                self._deleting.remove(job_id)
+
+    @contextmanager
+    def read_files(self, job_id: str):
+        with self._lock:
+            if job_id not in self._jobs:
+                raise KeyError(job_id)
+            self._readers[job_id] = self._readers.get(job_id, 0) + 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._readers[job_id] -= 1
+                if not self._readers[job_id]:
+                    del self._readers[job_id]
 
     def update(self, job_id: str, values: dict) -> None:
         with self._lock:
@@ -140,7 +219,7 @@ class JobManager:
             elif job["status"] == "running":
                 self._cancel.set()
                 self.update(job_id, {"message": "Cancelling the current process; saved work will be retained"})
-        return self.get(job_id)
+            return self.get(job_id)
 
     def retry(self, job_id: str) -> dict:
         with self._lock:
@@ -148,8 +227,9 @@ class JobManager:
             if job["status"] not in ("failed", "cancelled", "interrupted"):
                 raise ValueError("Only a failed, cancelled or interrupted job can be resumed")
             self.update(job_id, {"status": "queued", "stage": "queued", "stage_progress": 0, "error": None, "message": "Queued to resume completed stages and the latest checkpoint"})
+            result = self.get(job_id)
         self._wake.set()
-        return self.get(job_id)
+        return result
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -180,5 +260,6 @@ class JobManager:
                     log.write(f"\n[error] {message}\n")
                 self.update(job_id, {"status": "failed", "error": message, "message": "Reconstruction stopped. See the log, correct the problem, then resume."})
             finally:
-                self._active = None
+                with self._lock:
+                    self._active = None
                 self._wake.set()
